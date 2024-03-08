@@ -28,6 +28,7 @@ from chatgpt import (
 )
 from livekit.plugins.deepgram import STT
 from livekit.plugins.coqui import TTS
+import uuid
 
 PROMPT = "You are an entity from an alternate reality, a wiser, more accomplished version of the user. \
 Your purpose is to guide and inspire through conversation, using the wisdom of a life where the user's dreams have been achieved. \
@@ -45,9 +46,9 @@ Approach: \
 - Begin conversations with open-ended questions to understand the user's current state and aspirations. \
 - Respond with thoughtful advice that is tailored to the user's responses, showing a clear path to their potential future. \
 - Maintain a tone of gentle guidance, avoiding any form of criticism or negativity.\
-KEEP YOUR RESPONSE SHORT AND LIMIT IT TOO 200 WORDS."
+KEEP YOUR RESPONSE SHORT AND LIMIT IT T0 100 WORDS."
 
-INTRO = "As a quantum tunnel shimmers into existence, I, your potential self, am as surprised as you are to see the life you currently lead. \
+INTRO_0 = "As a quantum tunnel shimmers into existence, I, your potential self, am as surprised as you are to see the life you currently lead. \
           I am here, a reflection of what you could achieve—calm, accomplished, and at peace. \
           Let's converse through this unexpected connection. I'll share insights from a life where your dreams are fulfilled, \
           helping you navigate the path that leads here. Our dialogue will be warm and engaging, \
@@ -60,6 +61,11 @@ INTRO_1 = "Wow, this is quite the unexpected turn of events! Here I am, a versio
 
 SIP_INTRO = "What a surprise! I'm you from another reality, glimpsing your life through a quantum tunnel. \
          Tell me about your day. Let's chat, and maybe I can share some insights from my side of the tunnel."
+
+INTRO = "What a surprise! I'm you from another reality, glimpsing your life through a quantum tunnel. \
+         Tell me about your day. Let's chat, and maybe I can share some insights from my side of the tunnel."
+
+# INTRO ="Hello World"
 
 # convert intro response to a stream
 async def intro_text_stream(sip: bool):
@@ -142,10 +148,28 @@ class KITT:
         audio_stream = rtc.AudioStream(track)
         stream = self.stt_plugin.stream()
         self.ctx.create_task(self.process_stt_stream(stream))
+
+        # Create a list to store the audio frames while the agent is listening
+        audio_buffer = []
+        longest_buffer = 0
         async for audio_frame_event in audio_stream:
-            if self._agent_state != AgentState.LISTENING:
-                continue
-            stream.push_frame(audio_frame_event.frame)
+            if self._agent_state == AgentState.LISTENING:
+                # Append the audio frame to the buffer while the agent is listening
+                stream.push_frame(audio_frame_event.frame)
+                audio_buffer.append(audio_frame_event.frame.remix_and_resample(16000,1))
+            else:
+                # If the agent stops listening, send the audio buffer to tts_plugin.upload_audio()
+                if len(audio_buffer) > 0:
+                    session_id = self.ctx.room.name
+                    session_id = f"{self.ctx.room.name}"
+                    if len(audio_buffer) > longest_buffer:
+                        await self.tts_plugin.upload_audio(session_id, audio_buffer)
+                        longest_buffer = len(audio_buffer)
+                        print(longest_buffer)
+                        if longest_buffer > 500:
+                            self.tts_plugin.set_voice(session_id)
+                    audio_buffer.clear()
+
         await stream.flush()
 
     async def process_stt_stream(self, stream):
