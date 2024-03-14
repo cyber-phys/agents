@@ -172,13 +172,16 @@ class KITT:
 
         self.localVideoTranscript = False
 
+        self.audio_stream_task: asyncio.Task = None
+
+
     
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
         # self.ctx.room.on("disconnected", your_cleanup_function)
 
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
-
+        self.ctx.room.on("active_speakers_changed", self.on_active_speakers_changed)
 
         # publish audio track
         track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
@@ -256,6 +259,16 @@ class KITT:
             self.latest_frame_width = frame.width
             self.latest_frame_height = frame.height
 
+    def on_active_speakers_changed(self, speakers: list[rtc.Participant]):
+        if speakers:
+            active_speaker = speakers[0]
+            logging.info(f"Active speaker: {active_speaker.identity}")
+            self.update_state(interrupt=True)
+            if self.audio_stream_task and not self.audio_stream_task.done():
+                self.audio_stream_task.cancel()
+        else:
+            logging.info("No active speaker")
+
     def get_last_entries(self, num_entries):
         last_entries = ""
         total_entries = len(self.video_transcript["scene"])
@@ -303,7 +316,6 @@ class KITT:
                 self.video_transcript["scene"].append(all_text)
                 self.video_transcript["time"].append(current_time)
             await asyncio.sleep(2)
-
 
 
     async def process_audio_track(self, track: rtc.Track):
@@ -395,7 +407,7 @@ class KITT:
 
         stream = self.tts_plugin.stream()
         # send audio to TTS in parallel
-        self.ctx.create_task(self.send_audio_stream(stream))
+        self.audio_stream_task = self.ctx.create_task(self.send_audio_stream(stream))
         all_text = await self.process_text_stream(text_stream)
         stream.push_text(all_text)
         self.update_state(processing=False)
@@ -410,10 +422,16 @@ class KITT:
             elif e.type == SynthesisEventType.FINISHED:
                 self.update_state(sending_audio=False)
             elif e.type == SynthesisEventType.AUDIO:
+                if self._agent_state == AgentState.LISTENING:
+                    # Stop the audio stream if the agent is listening
+                    break
                 await self.audio_out.capture_frame(e.audio.data)
         await tts_stream.aclose()
 
-    def update_state(self, sending_audio: bool = None, processing: bool = None):
+    def update_state(self, sending_audio: bool = None, processing: bool = None, interrupt: bool = None):
+        if interrupt is not None:
+            self._sending_audio = False
+            self._processing = False
         if sending_audio is not None:
             self._sending_audio = sending_audio
         if processing is not None:
@@ -435,7 +453,7 @@ class KITT:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.ERROR)
+    logging.basicConfig(level=logging.INFO)
 
     async def job_request_cb(job_request: agents.JobRequest):
         logging.info("Accepting job for KITT")
