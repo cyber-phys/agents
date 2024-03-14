@@ -89,10 +89,6 @@ AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 COQUI_TTS_SAMPLE_RATE = 24000
 COQUI_TTS_CHANNELS = 1
 
-_BAKLLAVA_OUTPUT_WIDTH = 512
-_BAKLLAVA_FAL_OUTPUT_HEIGHT = 512
-
-
 class KITT:
     @classmethod
     async def create(cls, ctx: agents.JobContext):
@@ -123,8 +119,11 @@ class KITT:
 
         self.bakllava = OllamaMultiModal()
         self.bakllava_stream = self.bakllava.stream()
-        self.video_transcript = ""
-
+        # current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # self.video_transcript = {"scene": ["A person is sitting in front of a computer, looking at a the screen. The room appears to be a home office or study."], "time": [current_time]}
+        self.video_transcript = {"scene": [], "time": []}
+        self.bakllava_prompt = "Here are the last few entries of the video transcript. Based on the provided input image, describe any changes to the scene compared to the previous entries. If the scene remains unchanged, respond with only the word 'UNCHANGED' without any additional text."
+    
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
         # self.ctx.room.on("disconnected", your_cleanup_function)
@@ -169,16 +168,49 @@ class KITT:
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
         async for video_frame_event in video_stream:
+            # Get the last 3 entries from video_transcript
+            last_entries = self.get_last_entries(3)
+
+            # Construct the prompt with the last entries and the Bakllava prompt
+            prompt = self.bakllava_prompt + "\n\n" + last_entries
+
+            # print(f"Prompt {prompt}")
+
             self.bakllava_stream.push_frame(
                 video_frame_event.frame,
-                prompt="Desribe what you see."
+                prompt=prompt
             )
+
+    def get_last_entries(self, num_entries):
+        last_entries = ""
+        total_entries = len(self.video_transcript["scene"])
+
+        # Determine the number of entries to include
+        num_entries = min(num_entries, total_entries)
+
+        # Iterate over the last num_entries in reverse order
+        for i in range(total_entries - num_entries, total_entries):
+            timestamp = self.video_transcript["time"][i]
+            scene_description = self.video_transcript["scene"][i]
+            last_entries += f"{timestamp}\n{scene_description}\n\n"
+
+        return last_entries.strip()
     
     async def update_transcript(self):
         # Consume the generated text responses
         async for text_response in self.bakllava_stream:
-            self.video_transcript += text_response
-            print(f"Generated text: {text_response}") 
+            try:
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                # Append the scene description and timestamp to the respective lists
+                self.video_transcript["scene"].append(text_response)
+                self.video_transcript["time"].append(current_time)
+
+                print(f"Generated text: {text_response}")
+            except json.JSONDecodeError as e:
+                print(f"Error processing frame: {str(e)}")
+                # Handle the error, e.g., skip the frame or take appropriate action
+                continue
 
     async def process_audio_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)

@@ -96,7 +96,7 @@ class OllamaMutliModalStream:
                     payload = {
                         "model": "bakllava",
                         "prompt": input.prompt,
-                        "images": [base64_img]
+                        "images": [base64_img],
                     }
                     # print(f"Sending payload to {self._url}: {payload}")
 
@@ -105,19 +105,22 @@ class OllamaMutliModalStream:
                         # Initialize an empty string to hold all response fields
                         final_output = ''
                         # Process streaming response
-                        async for chunk in response.content.iter_chunked(1024):
+                        #TODO: fix this it is hacky and drops responses
+                        async for chunk in response.content.iter_any():
                             chunk_str = chunk.decode('utf-8')
                             if chunk_str.strip():
-                                # print(f"\nReceived chunk: {chunk_str}\n")
-                                chunk_json = json.loads(chunk_str)
-                                final_output += chunk_json['response']
-                                # Check if the chunk contains "done":true
-                                if chunk_json['done']:
-                                    break
+                                try:
+                                    chunk_json = json.loads(chunk_str)
+                                    final_output += chunk_json['response']
+                                    if chunk_json['done']:
+                                        break
+                                except json.JSONDecodeError as e:
+                                    logging.error(f"Error decoding JSON: {e} {chunk}")
+                                    continue
                         
                         # print(f"\nFinal output: {final_output}\n")
                         # Put the final output into the output queue
-                        if len(final_output) > 5:
+                        if len(final_output) > 5 and "unchanged" not in final_output.lower():
                             await self._output_queue.put(final_output)
 
                 except asyncio.CancelledError:
