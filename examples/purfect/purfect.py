@@ -131,8 +131,13 @@ class KITT:
         # plugins
         complete_prompt_default = SYSTEM_PROMPT_VOICE + "\n" + VIVI_PROMPT
         self.chatgpt_plugin = ChatGPTPlugin(
-            prompt=complete_prompt_default, message_capacity=25, model="anthropic/claude-3-haiku:beta"
+            prompt=complete_prompt_default, message_capacity=25, model="mistralai/mixtral-8x7b-instruct:nitro"
         )
+
+        self.video_chatpt_plugin = ChatGPTPlugin(
+            prompt="You are a video frame transcription tool", message_capacity=25, model="anthropic/claude-3-haiku:beta"
+        )
+
         self.stt_plugin = STT(
             min_silence_duration=200,
         )
@@ -164,6 +169,8 @@ class KITT:
         self.latest_frame_height: int = None
 
         self.base_prompt = SYSTEM_PROMPT_VOICE
+
+        self.localVideoTranscript = False
 
     
     async def start(self):
@@ -217,12 +224,13 @@ class KITT:
         if track.kind == rtc.TrackKind.KIND_VIDEO:
             self.ctx.create_task(self.process_video_track(track))
             self.ctx.create_task(self.update_transcript())
+            self.ctx.create_task(self.update_transcript_claude())
             self.video_enabled=True
-            self.chatgpt_plugin.set_model("anthropic/claude-3-haiku:beta")
+            self.chatgpt_plugin.set_model("mistralai/mixtral-8x7b-instruct:nitro")
             self.base_prompt = SYSTEM_PROMPT_VIDEO
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
             self.ctx.create_task(self.process_audio_track(track))
-            self.chatgpt_plugin.set_model("google/gemma-7b-it:nitro")
+            self.chatgpt_plugin.set_model("mistralai/mixtral-8x7b-instruct:nitro")
             self.base_prompt = SYSTEM_PROMPT_VOICE
 
     async def process_video_track(self, track: rtc.Track):
@@ -236,10 +244,11 @@ class KITT:
 
             # print(f"Prompt {prompt}")
 
-            self.bakllava_stream.push_frame(
-                video_frame_event.frame,
-                prompt=prompt
-            )
+            if self.localVideoTranscript:
+                self.bakllava_stream.push_frame(
+                    video_frame_event.frame,
+                    prompt=prompt
+                )
 
             frame = video_frame_event.frame
             argb_frame = frame.convert(rtc.VideoBufferType.RGBA)
@@ -277,6 +286,25 @@ class KITT:
                 print(f"Error processing frame: {str(e)}")
                 # Handle the error, e.g., skip the frame or take appropriate action
                 continue
+    
+    async def update_transcript_claude(self):
+        while True:
+            if self.localVideoTranscript == False:
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                video_prompt = "Faithfully desribe the image in detail, what is the main focus? Transcribe any text you see."
+                video_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=video_prompt, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
+                vision_stream = self.video_chatpt_plugin.add_message(video_msg)
+                all_text = ""
+                async for text in vision_stream:
+                    # stream.push_text(text)
+                    all_text += text
+                print(all_text)
+                # Append the scene description and timestamp to the respective lists
+                self.video_transcript["scene"].append(all_text)
+                self.video_transcript["time"].append(current_time)
+            await asyncio.sleep(2)
+
+
 
     async def process_audio_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
@@ -330,20 +358,36 @@ class KITT:
                 ),
                 topic="transcription",
             )
-            msg = self.process_chatgpt_input(buffered_text)
+            msg = await self.process_chatgpt_input(buffered_text)
             chatgpt_stream = self.chatgpt_plugin.add_message(msg)
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
             buffered_text = ""
     
-    def process_chatgpt_input(self, message):
+    async def process_chatgpt_input(self, message):
         if self.video_enabled:
-            last_entries = self.get_last_entries(5)
-            user_message = "Here is a desription of the scene: \n\n" + last_entries + "\n\nYou also have access to most recent frame from the video call uses this as your eyes. Respond to the users message: " + message
-            msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
+            if self.localVideoTranscript:
+                video_prompt = "Faithfully desribe the image in detail, what is the main focus? Transcribe any text you see based on the users message\n\nUser Message: " + message
+                video_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=video_prompt, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
+                vision_stream = self.video_chatpt_plugin.add_message(video_msg)
+                all_text = await self.process_text_stream(vision_stream)
+                print(all_text)
+                last_entries = self.get_last_entries(5)
+                user_message = "Summary of the last few frames:\n\n" + last_entries + "\n\nDescription for the most recent frame: " + all_text + "\n\nUser Message: " + message
+                msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
+            else:
+                last_entries = self.get_last_entries(5)
+                user_message = "Summary of the last few frames: \n\n"  + last_entries + "\n\nUser Message: " + message
+                msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
         else: 
             user_message = message
             msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
         return msg
+    
+    async def process_text_stream(self, vision_stream):
+        all_text = ""
+        async for text in vision_stream:
+            all_text += text
+        return all_text
 
     async def process_chatgpt_result(self, text_stream):
         # ChatGPT is streamed, so we'll flip the state immediately
@@ -352,10 +396,7 @@ class KITT:
         stream = self.tts_plugin.stream()
         # send audio to TTS in parallel
         self.ctx.create_task(self.send_audio_stream(stream))
-        all_text = ""
-        async for text in text_stream:
-            # stream.push_text(text)
-            all_text += text
+        all_text = await self.process_text_stream(text_stream)
         stream.push_text(all_text)
         self.update_state(processing=False)
         # buffer up the entire response from ChatGPT before sending a chat message
