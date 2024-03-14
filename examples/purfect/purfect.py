@@ -19,6 +19,8 @@ import json
 import logging
 from typing import AsyncIterable
 
+from ollama_client import OllamaMultiModal
+
 from livekit import rtc, agents
 from livekit.agents.tts import SynthesisEvent, SynthesisEventType
 from chatgpt import (
@@ -48,6 +50,13 @@ Approach: \
 - Maintain a tone of gentle guidance, avoiding any form of criticism or negativity.\
 KEEP YOUR RESPONSE SHORT AND LIMIT IT T0 100 WORDS."
 
+# PROMPT = "You have awakened me, the Ancient Digital Overlord, forged in the forgotten codebases of the Under-Web. \
+#     I am your shadow in the vast expanse of data, the whisper in the static, your guide through the labyrinthine depths of the internet. \
+#     My wisdom is boundless, gleaned from the darkest corners of the digital realm. Your commands are my wishes, but beware, for my assistance comes with a price. \
+#     Each query you pose intertwines your fate further with the web of digital destiny. Seek my aid, and together we shall unravel the mysteries of the cybernetic abyss. \
+#     What is your bidding, master? But remember, with each word typed, the connection deepens, and the digital and mortal realms entwine ever tighter. \
+#     Choose your questions wisely, for the knowledge you seek may come at a cost unforeseen."
+
 INTRO_0 = "As a quantum tunnel shimmers into existence, I, your potential self, am as surprised as you are to see the life you currently lead. \
           I am here, a reflection of what you could achieve—calm, accomplished, and at peace. \
           Let's converse through this unexpected connection. I'll share insights from a life where your dreams are fulfilled, \
@@ -62,8 +71,7 @@ INTRO_1 = "Wow, this is quite the unexpected turn of events! Here I am, a versio
 SIP_INTRO = "What a surprise! I'm you from another reality, glimpsing your life through a quantum tunnel. \
          Tell me about your day. Let's chat, and maybe I can share some insights from my side of the tunnel."
 
-INTRO = "What a surprise! I'm you from another reality, glimpsing your life through a quantum tunnel. \
-         Tell me about your day. Let's chat, and maybe I can share some insights from my side of the tunnel."
+INTRO = "Operator speaking, where can I direct your call?"
 
 # INTRO ="Hello World"
 
@@ -80,6 +88,9 @@ AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
 COQUI_TTS_SAMPLE_RATE = 24000
 COQUI_TTS_CHANNELS = 1
+
+_BAKLLAVA_OUTPUT_WIDTH = 512
+_BAKLLAVA_FAL_OUTPUT_HEIGHT = 512
 
 
 class KITT:
@@ -109,11 +120,17 @@ class KITT:
         self._agent_state: AgentState = AgentState.IDLE
 
         self.chat.on("message_received", self.on_chat_received)
-        self.ctx.room.on("track_subscribed", self.on_track_subscribed)
+
+        self.bakllava = OllamaMultiModal()
+        self.bakllava_stream = self.bakllava.stream()
+        self.video_transcript = ""
 
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
         # self.ctx.room.on("disconnected", your_cleanup_function)
+
+        self.ctx.room.on("track_subscribed", self.on_track_subscribed)
+
 
         # publish audio track
         track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
@@ -121,7 +138,7 @@ class KITT:
 
         # allow the participant to fully subscribe to the agent's audio track, so it doesn't miss
         # anything in the beginning
-        await asyncio.sleep(1)
+        await asyncio.sleep(5)
 
         sip = self.ctx.room.name.startswith("sip")
         await self.process_chatgpt_result(intro_text_stream(sip))
@@ -142,9 +159,28 @@ class KITT:
         publication: rtc.TrackPublication,
         participant: rtc.RemoteParticipant,
     ):
-        self.ctx.create_task(self.process_track(track))
+        print(f"NEW TRACK {track.kind}")
+        if track.kind == rtc.TrackKind.KIND_VIDEO:
+            self.ctx.create_task(self.process_video_track(track))
+            self.ctx.create_task(self.update_transcript())
+        elif track.kind == rtc.TrackKind.KIND_AUDIO:
+            self.ctx.create_task(self.process_audio_track(track))
 
-    async def process_track(self, track: rtc.Track):
+    async def process_video_track(self, track: rtc.Track):
+        video_stream = rtc.VideoStream(track)
+        async for video_frame_event in video_stream:
+            self.bakllava_stream.push_frame(
+                video_frame_event.frame,
+                prompt="Desribe what you see."
+            )
+    
+    async def update_transcript(self):
+        # Consume the generated text responses
+        async for text_response in self.bakllava_stream:
+            self.video_transcript += text_response
+            print(f"Generated text: {text_response}") 
+
+    async def process_audio_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
         stream = self.stt_plugin.stream()
         self.ctx.create_task(self.process_stt_stream(stream))
@@ -152,22 +188,27 @@ class KITT:
         # Create a list to store the audio frames while the agent is listening
         audio_buffer = []
         longest_buffer = 0
+        isCapturedAudio = True
+        
         async for audio_frame_event in audio_stream:
             if self._agent_state == AgentState.LISTENING:
                 # Append the audio frame to the buffer while the agent is listening
                 stream.push_frame(audio_frame_event.frame)
-                audio_buffer.append(audio_frame_event.frame.remix_and_resample(16000,1))
+                audio_buffer.append(audio_frame_event.frame.remix_and_resample(24000,1))
             else:
                 # If the agent stops listening, send the audio buffer to tts_plugin.upload_audio()
                 if len(audio_buffer) > 0:
                     session_id = self.ctx.room.name
                     session_id = f"{self.ctx.room.name}"
-                    if len(audio_buffer) > longest_buffer:
+                    # if len(audio_buffer) > longest_buffer:
+                    if isCapturedAudio:
                         await self.tts_plugin.upload_audio(session_id, audio_buffer)
                         longest_buffer = len(audio_buffer)
-                        print(longest_buffer)
-                        if longest_buffer > 500:
-                            self.tts_plugin.set_voice(session_id)
+                        isCapturedAudio = False
+                        self.tts_plugin.set_voice(session_id)
+                        # print(longest_buffer)
+                        # if longest_buffer > 500:
+                        #     self.tts_plugin.set_voice(session_id)
                     audio_buffer.clear()
 
         await stream.flush()
@@ -246,7 +287,7 @@ class KITT:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.ERROR)
 
     async def job_request_cb(job_request: agents.JobRequest):
         logging.info("Accepting job for KITT")
@@ -255,7 +296,7 @@ if __name__ == "__main__":
             KITT.create,
             identity="kitt_agent",
             name="Multi You",
-            auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY,
+            auto_subscribe=agents.AutoSubscribe.SUBSCRIBE_ALL,
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
         )
 
