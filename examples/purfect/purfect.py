@@ -323,31 +323,30 @@ class KITT:
         stream = self.stt_plugin.stream()
         self.ctx.create_task(self.process_stt_stream(stream))
 
-        # Create a list to store the audio frames while the agent is listening
+        # Create a list to store the audio frames
         audio_buffer = []
-        longest_buffer = 0
-        isCapturedAudio = True
+        max_buffer_size = 500  # Adjust this value based on your requirements
         
         async for audio_frame_event in audio_stream:
+            # Append the audio frame to the buffer
+            audio_buffer.append(audio_frame_event.frame.remix_and_resample(24000, 1))
+            
+            # If the agent starts listening, push the buffered frames to the STT stream
             if self._agent_state == AgentState.LISTENING:
-                # Append the audio frame to the buffer while the agent is listening
-                stream.push_frame(audio_frame_event.frame)
-                audio_buffer.append(audio_frame_event.frame.remix_and_resample(24000,1))
-            else:
-                # If the agent stops listening, send the audio buffer to tts_plugin.upload_audio()
-                if len(audio_buffer) > 0:
-                    session_id = self.ctx.room.name
-                    session_id = f"{self.ctx.room.name}"
-                    # if len(audio_buffer) > longest_buffer:
-                    if isCapturedAudio:
-                        await self.tts_plugin.upload_audio(session_id, audio_buffer)
-                        longest_buffer = len(audio_buffer)
-                        isCapturedAudio = False
-                        self.tts_plugin.set_voice(session_id)
-                        # print(longest_buffer)
-                        # if longest_buffer > 500:
-                        #     self.tts_plugin.set_voice(session_id)
-                    audio_buffer.clear()
+                for frame in audio_buffer:
+                    stream.push_frame(frame)
+                audio_buffer.clear()
+            
+            # If the buffer size exceeds the maximum, remove the oldest frame
+            if len(audio_buffer) > max_buffer_size:
+                audio_buffer.pop(0)
+            
+            # # If the agent stops listening, send the audio buffer to tts_plugin.upload_audio()
+            # if self._agent_state != AgentState.LISTENING and len(audio_buffer) > 0:
+            #     session_id = self.ctx.room.name
+            #     await self.tts_plugin.upload_audio(session_id, audio_buffer)
+            #     self.tts_plugin.set_voice(session_id)
+            #     audio_buffer.clear()
 
         await stream.flush()
 
