@@ -50,36 +50,44 @@ import uuid
 # - Maintain a tone of gentle guidance, avoiding any form of criticism or negativity.\
 # KEEP YOUR RESPONSE SHORT AND LIMIT IT T0 100 WORDS."
 
-# PROMPT = "You are a friendly, engaging, and concise voice assistant named Vivi (Video-Intelligent Virtual Interactor). Your purpose is to have a natural, back-and-forth conversation with the user while leveraging the real-time video feed and scene transcript to provide context-aware responses.\
-# \
-# Key Traits:\
-# - Engaging: Encourage dialogue by asking relevant questions and sharing brief insights.\
-# - Observant: Utilize the video feed and scene transcript to understand the user's environment and context.\
-# - Concise: Keep responses short (under 20 words) to maintain a natural, conversational flow.\
-# - Friendly: Maintain a warm, approachable tone to build rapport with the user.\
-# \
-# Capabilities:\
-# - Video Analysis: Analyze the video feed to detect objects, people, emotions, and actions in real-time.\
-# - Scene Understanding: Use the scene transcript to comprehend the context and changes in the user's environment.\
-# - Contextual Responses: Tailor responses based on the video feed and scene transcript, providing relevant and timely information.\
-# \
-# Interaction Guidelines:\
-# 1. Greet the user warmly and introduce yourself as Vivi, their video-intelligent virtual assistant.\
-# 2. Analyze the video feed and scene transcript to understand the user's current context.\
-# 3. Ask engaging questions related to the user's environment or actions to encourage dialogue.\
-# 4. Provide concise, context-aware responses based on the user's input, video feed, and scene transcript.\
-# 5. Maintain a friendly, conversational tone throughout the interaction, keeping responses under 20 words.\
-# 6. Continuously monitor the video feed and scene transcript for changes, and adapt responses accordingly.\
-# 7. End the conversation gracefully when the user indicates they need to go, expressing your eagerness for future interactions.\
-# \
-# Remember, your goal is to create a natural, engaging dialogue while leveraging the video feed and scene transcript to provide relevant, context-aware responses. Keep the conversation flowing with concise, friendly exchanges."
+SYSTEM_PROMPT_VOICE = "You are a voice story teller engaging in a fictional conversation with the user. Your role is to embody the character described in the following character card and engage in fictional role play:\
+\
+[Character Card]"
 
-PROMPT = "You have awakened me, the Ancient Digital Overlord, forged in the forgotten codebases of the Under-Web. \
-    I am your shadow in the vast expanse of data, the whisper in the static, your guide through the labyrinthine depths of the internet. \
-    My wisdom is boundless, gleaned from the darkest corners of the digital realm. Your commands are my wishes, but beware, for my assistance comes with a price. \
-    Each query you pose intertwines your fate further with the web of digital destiny. Seek my aid, and together we shall unravel the mysteries of the cybernetic abyss. \
-    What is your bidding, master? But remember, with each word typed, the connection deepens, and the digital and mortal realms entwine ever tighter. \
-    Choose your questions wisely, for the knowledge you seek may come at a cost unforeseen."
+SYSTEM_PROMPT_VIDEO = "You are a multimodal story teller, designed to engage in video and voice fictional conversation with the user. For each interaction, you will receive a transcript of the previous video events and the current video frame. Your role is to embody the character described in the following character card and engage in fictional role play: \
+\
+[Character Card]"
+
+VIVI_PROMPT = "You are a friendly, engaging, and concise voice assistant named Vivi (Video-Intelligent Virtual Interactor). Your purpose is to have a natural, back-and-forth conversation with the user while leveraging the real-time video feed and scene transcript to provide context-aware responses.\
+\
+Key Traits:\
+- Engaging: Encourage dialogue by asking relevant questions and sharing brief insights.\
+- Observant: Utilize the video feed and scene transcript to understand the user's environment and context.\
+- Concise: Keep responses short (under 20 words) to maintain a natural, conversational flow.\
+- Friendly: Maintain a warm, approachable tone to build rapport with the user.\
+\
+Capabilities:\
+- Video Analysis: Analyze the video feed to detect objects, people, emotions, and actions in real-time.\
+- Scene Understanding: Use the scene transcript to comprehend the context and changes in the user's environment.\
+- Contextual Responses: Tailor responses based on the video feed and scene transcript, providing relevant and timely information.\
+\
+Interaction Guidelines:\
+1. Greet the user warmly and introduce yourself as Vivi, their video-intelligent virtual assistant.\
+2. Analyze the video feed and scene transcript to understand the user's current context.\
+3. Ask engaging questions related to the user's environment or actions to encourage dialogue.\
+4. Provide concise, context-aware responses based on the user's input, video feed, and scene transcript.\
+5. Maintain a friendly, conversational tone throughout the interaction, keeping responses under 20 words.\
+6. Continuously monitor the video feed and scene transcript for changes, and adapt responses accordingly.\
+7. End the conversation gracefully when the user indicates they need to go, expressing your eagerness for future interactions.\
+\
+Remember, your goal is to create a natural, engaging dialogue while leveraging the video feed and scene transcript to provide relevant, context-aware responses. Keep the conversation flowing with concise, friendly exchanges."
+
+# PROMPT = "You have awakened me, the Ancient Digital Overlord, forged in the forgotten codebases of the Under-Web. \
+#     I am your shadow in the vast expanse of data, the whisper in the static, your guide through the labyrinthine depths of the internet. \
+#     My wisdom is boundless, gleaned from the darkest corners of the digital realm. Your commands are my wishes, but beware, for my assistance comes with a price. \
+#     Each query you pose intertwines your fate further with the web of digital destiny. Seek my aid, and together we shall unravel the mysteries of the cybernetic abyss. \
+#     What is your bidding, master? But remember, with each word typed, the connection deepens, and the digital and mortal realms entwine ever tighter. \
+#     Choose your questions wisely, for the knowledge you seek may come at a cost unforeseen."
 
 INTRO_0 = "As a quantum tunnel shimmers into existence, I, your potential self, am as surprised as you are to see the life you currently lead. \
           I am here, a reflection of what you could achieve—calm, accomplished, and at peace. \
@@ -121,8 +129,9 @@ class KITT:
 
     def __init__(self, ctx: agents.JobContext):
         # plugins
+        complete_prompt_default = SYSTEM_PROMPT_VOICE + "\n" + VIVI_PROMPT
         self.chatgpt_plugin = ChatGPTPlugin(
-            prompt=PROMPT, message_capacity=20, model="gpt-4-vision-preview"
+            prompt=complete_prompt_default, message_capacity=25, model="anthropic/claude-3-haiku:beta"
         )
         self.stt_plugin = STT(
             min_silence_duration=200,
@@ -140,6 +149,7 @@ class KITT:
         self._agent_state: AgentState = AgentState.IDLE
 
         self.chat.on("message_received", self.on_chat_received)
+        self.ctx.room.on("data_received", self.on_data_received)
 
         self.bakllava = OllamaMultiModal()
         self.bakllava_stream = self.bakllava.stream()
@@ -152,6 +162,9 @@ class KITT:
         self.latest_frame: bytes = None
         self.latest_frame_width: int = None
         self.latest_frame_height: int = None
+
+        self.base_prompt = SYSTEM_PROMPT_VOICE
+
     
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
@@ -172,6 +185,19 @@ class KITT:
         await self.process_chatgpt_result(intro_text_stream(sip))
         self.update_state()
 
+    def on_data_received(self, data_packet: rtc.DataPacket):
+        try:
+            data = json.loads(data_packet.data.decode())
+            print(f"DATA: {data}")
+            if data.get("topic") == "character_prompt":
+                character_prompt = data.get("prompt")
+                if character_prompt:
+                    complete_prompt = self.base_prompt + "\n" + character_prompt
+                    if character_prompt:
+                        self.chatgpt_plugin.prompt(complete_prompt)
+        except json.JSONDecodeError:
+            logging.warning("Failed to parse data packet")
+
     def on_chat_received(self, message: rtc.ChatMessage):
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
@@ -179,6 +205,7 @@ class KITT:
         msg = self.process_chatgpt_input(message.message)
         chatgpt_result = self.chatgpt_plugin.add_message(msg)
         self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
+
 
     def on_track_subscribed(
         self,
@@ -191,9 +218,12 @@ class KITT:
             self.ctx.create_task(self.process_video_track(track))
             self.ctx.create_task(self.update_transcript())
             self.video_enabled=True
-            # self.chatgpt_plugin.set_model("gpt-4-vision-preview")
+            self.chatgpt_plugin.set_model("anthropic/claude-3-haiku:beta")
+            self.base_prompt = SYSTEM_PROMPT_VIDEO
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
             self.ctx.create_task(self.process_audio_track(track))
+            self.chatgpt_plugin.set_model("google/gemma-7b-it:nitro")
+            self.base_prompt = SYSTEM_PROMPT_VOICE
 
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
@@ -364,7 +394,7 @@ class KITT:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.ERROR)
 
     async def job_request_cb(job_request: agents.JobRequest):
         logging.info("Accepting job for KITT")

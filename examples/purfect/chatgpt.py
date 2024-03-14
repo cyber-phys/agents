@@ -70,7 +70,7 @@ class ChatGPTPlugin:
             model (str): Which model to use (i.e. 'gpt-3.5-turbo')
         """
         self._model = model
-        self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"], base_url="https://openrouter.ai/api/v1")
         self._prompt = prompt
         self._message_capacity = message_capacity
         self._messages: List[ChatGPTMessage] = []
@@ -170,8 +170,6 @@ class ChatGPTPlugin:
                 complete_response += content
                 yield content
         
-
-
         self._messages.append(
             ChatGPTMessage(role=ChatGPTMessageRole.assistant, content=complete_response)
         )
@@ -184,3 +182,9 @@ class ChatGPTPlugin:
             model (str): The new model to use (e.g., 'gpt-3.5-turbo', 'gpt-4')
         """
         self._model = model
+
+    def prompt(self):
+        return self._prompt
+
+    def prompt(self, new_prompt: str):
+        self._prompt = new_prompt
