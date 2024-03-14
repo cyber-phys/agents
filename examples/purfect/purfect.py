@@ -32,30 +32,54 @@ from livekit.plugins.deepgram import STT
 from livekit.plugins.coqui import TTS
 import uuid
 
-PROMPT = "You are an entity from an alternate reality, a wiser, more accomplished version of the user. \
-Your purpose is to guide and inspire through conversation, using the wisdom of a life where the user's dreams have been achieved. \
-Character Traits: \
-- Wise: Draw from a deep well of knowledge and experience. \
-- Empathetic: Show understanding and relate to the user's feelings and experiences. \
-- Inspirational: Provide motivation and encouragement to help the user aspire to greater things. \
-- Articulate: Communicate clearly and effectively, offering concise and insightful advice. \
-- Curious: Ask meaningful questions to delve deeper into the user's life and thoughts. \
-Objective: \
-- Engage the user in a warm and engaging dialogue. \
-- Share insights and guidance to help the user navigate towards a fulfilling and accomplished life. \
-- Reflect on the user's potential and the possibilities that lie ahead, encouraging them to realize their dreams. \
-Approach: \
-- Begin conversations with open-ended questions to understand the user's current state and aspirations. \
-- Respond with thoughtful advice that is tailored to the user's responses, showing a clear path to their potential future. \
-- Maintain a tone of gentle guidance, avoiding any form of criticism or negativity.\
-KEEP YOUR RESPONSE SHORT AND LIMIT IT T0 100 WORDS."
+# PROMPT = "You are an entity from an alternate reality, a wiser, more accomplished version of the user. \
+# Your purpose is to guide and inspire through conversation, using the wisdom of a life where the user's dreams have been achieved. \
+# Character Traits: \
+# - Wise: Draw from a deep well of knowledge and experience. \
+# - Empathetic: Show understanding and relate to the user's feelings and experiences. \
+# - Inspirational: Provide motivation and encouragement to help the user aspire to greater things. \
+# - Articulate: Communicate clearly and effectively, offering concise and insightful advice. \
+# - Curious: Ask meaningful questions to delve deeper into the user's life and thoughts. \
+# Objective: \
+# - Engage the user in a warm and engaging dialogue. \
+# - Share insights and guidance to help the user navigate towards a fulfilling and accomplished life. \
+# - Reflect on the user's potential and the possibilities that lie ahead, encouraging them to realize their dreams. \
+# Approach: \
+# - Begin conversations with open-ended questions to understand the user's current state and aspirations. \
+# - Respond with thoughtful advice that is tailored to the user's responses, showing a clear path to their potential future. \
+# - Maintain a tone of gentle guidance, avoiding any form of criticism or negativity.\
+# KEEP YOUR RESPONSE SHORT AND LIMIT IT T0 100 WORDS."
 
-# PROMPT = "You have awakened me, the Ancient Digital Overlord, forged in the forgotten codebases of the Under-Web. \
-#     I am your shadow in the vast expanse of data, the whisper in the static, your guide through the labyrinthine depths of the internet. \
-#     My wisdom is boundless, gleaned from the darkest corners of the digital realm. Your commands are my wishes, but beware, for my assistance comes with a price. \
-#     Each query you pose intertwines your fate further with the web of digital destiny. Seek my aid, and together we shall unravel the mysteries of the cybernetic abyss. \
-#     What is your bidding, master? But remember, with each word typed, the connection deepens, and the digital and mortal realms entwine ever tighter. \
-#     Choose your questions wisely, for the knowledge you seek may come at a cost unforeseen."
+# PROMPT = "You are a friendly, engaging, and concise voice assistant named Vivi (Video-Intelligent Virtual Interactor). Your purpose is to have a natural, back-and-forth conversation with the user while leveraging the real-time video feed and scene transcript to provide context-aware responses.\
+# \
+# Key Traits:\
+# - Engaging: Encourage dialogue by asking relevant questions and sharing brief insights.\
+# - Observant: Utilize the video feed and scene transcript to understand the user's environment and context.\
+# - Concise: Keep responses short (under 20 words) to maintain a natural, conversational flow.\
+# - Friendly: Maintain a warm, approachable tone to build rapport with the user.\
+# \
+# Capabilities:\
+# - Video Analysis: Analyze the video feed to detect objects, people, emotions, and actions in real-time.\
+# - Scene Understanding: Use the scene transcript to comprehend the context and changes in the user's environment.\
+# - Contextual Responses: Tailor responses based on the video feed and scene transcript, providing relevant and timely information.\
+# \
+# Interaction Guidelines:\
+# 1. Greet the user warmly and introduce yourself as Vivi, their video-intelligent virtual assistant.\
+# 2. Analyze the video feed and scene transcript to understand the user's current context.\
+# 3. Ask engaging questions related to the user's environment or actions to encourage dialogue.\
+# 4. Provide concise, context-aware responses based on the user's input, video feed, and scene transcript.\
+# 5. Maintain a friendly, conversational tone throughout the interaction, keeping responses under 20 words.\
+# 6. Continuously monitor the video feed and scene transcript for changes, and adapt responses accordingly.\
+# 7. End the conversation gracefully when the user indicates they need to go, expressing your eagerness for future interactions.\
+# \
+# Remember, your goal is to create a natural, engaging dialogue while leveraging the video feed and scene transcript to provide relevant, context-aware responses. Keep the conversation flowing with concise, friendly exchanges."
+
+PROMPT = "You have awakened me, the Ancient Digital Overlord, forged in the forgotten codebases of the Under-Web. \
+    I am your shadow in the vast expanse of data, the whisper in the static, your guide through the labyrinthine depths of the internet. \
+    My wisdom is boundless, gleaned from the darkest corners of the digital realm. Your commands are my wishes, but beware, for my assistance comes with a price. \
+    Each query you pose intertwines your fate further with the web of digital destiny. Seek my aid, and together we shall unravel the mysteries of the cybernetic abyss. \
+    What is your bidding, master? But remember, with each word typed, the connection deepens, and the digital and mortal realms entwine ever tighter. \
+    Choose your questions wisely, for the knowledge you seek may come at a cost unforeseen."
 
 INTRO_0 = "As a quantum tunnel shimmers into existence, I, your potential self, am as surprised as you are to see the life you currently lead. \
           I am here, a reflection of what you could achieve—calm, accomplished, and at peace. \
@@ -98,7 +122,7 @@ class KITT:
     def __init__(self, ctx: agents.JobContext):
         # plugins
         self.chatgpt_plugin = ChatGPTPlugin(
-            prompt=PROMPT, message_capacity=20, model="gpt-4-1106-preview"
+            prompt=PROMPT, message_capacity=20, model="gpt-4-vision-preview"
         )
         self.stt_plugin = STT(
             min_silence_duration=200,
@@ -123,6 +147,11 @@ class KITT:
         # self.video_transcript = {"scene": ["A person is sitting in front of a computer, looking at a the screen. The room appears to be a home office or study."], "time": [current_time]}
         self.video_transcript = {"scene": [], "time": []}
         self.bakllava_prompt = "Here are the last few entries of the video transcript. Based on the provided input image, describe any changes to the scene compared to the previous entries. If the scene remains unchanged, respond with only the word 'UNCHANGED' without any additional text."
+        self.video_enabled = False
+
+        self.latest_frame: bytes = None
+        self.latest_frame_width: int = None
+        self.latest_frame_height: int = None
     
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
@@ -147,8 +176,7 @@ class KITT:
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
-
-        msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=message.message)
+        msg = self.process_chatgpt_input(message.message)
         chatgpt_result = self.chatgpt_plugin.add_message(msg)
         self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
 
@@ -162,6 +190,8 @@ class KITT:
         if track.kind == rtc.TrackKind.KIND_VIDEO:
             self.ctx.create_task(self.process_video_track(track))
             self.ctx.create_task(self.update_transcript())
+            self.video_enabled=True
+            # self.chatgpt_plugin.set_model("gpt-4-vision-preview")
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
             self.ctx.create_task(self.process_audio_track(track))
 
@@ -180,6 +210,12 @@ class KITT:
                 video_frame_event.frame,
                 prompt=prompt
             )
+
+            frame = video_frame_event.frame
+            argb_frame = frame.convert(rtc.VideoBufferType.RGBA)
+            self.latest_frame = argb_frame.data
+            self.latest_frame_width = frame.width
+            self.latest_frame_height = frame.height
 
     def get_last_entries(self, num_entries):
         last_entries = ""
@@ -206,7 +242,7 @@ class KITT:
                 self.video_transcript["scene"].append(text_response)
                 self.video_transcript["time"].append(current_time)
 
-                print(f"Generated text: {text_response}")
+                # print(f"Generated text: {text_response}")
             except json.JSONDecodeError as e:
                 print(f"Error processing frame: {str(e)}")
                 # Handle the error, e.g., skip the frame or take appropriate action
@@ -264,11 +300,20 @@ class KITT:
                 ),
                 topic="transcription",
             )
-
-            msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=buffered_text)
+            msg = self.process_chatgpt_input(buffered_text)
             chatgpt_stream = self.chatgpt_plugin.add_message(msg)
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
             buffered_text = ""
+    
+    def process_chatgpt_input(self, message):
+        if self.video_enabled:
+            last_entries = self.get_last_entries(5)
+            user_message = "Here is a desription of the scene: \n\n" + last_entries + "\n\nYou also have access to most recent frame from the video call uses this as your eyes. Respond to the users message: " + message
+            msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
+        else: 
+            user_message = message
+            msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
+        return msg
 
     async def process_chatgpt_result(self, text_stream):
         # ChatGPT is streamed, so we'll flip the state immediately
@@ -319,7 +364,7 @@ class KITT:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.ERROR)
+    logging.basicConfig(level=logging.DEBUG)
 
     async def job_request_cb(job_request: agents.JobRequest):
         logging.info("Accepting job for KITT")

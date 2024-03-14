@@ -19,17 +19,44 @@ import openai
 from dataclasses import dataclass
 from typing import AsyncIterable, List, Optional
 from enum import Enum
+import base64
+import io
+from PIL import Image
 
 ChatGPTMessageRole = Enum("MessageRole", ["system", "user", "assistant", "function"])
 
+def encode_image(image_path):
+  with open(image_path, "rb") as image_file:
+    return base64.b64encode(image_file.read()).decode('utf-8')
 
 @dataclass
 class ChatGPTMessage:
     role: ChatGPTMessageRole
     content: str
+    image_data: Optional[bytes] = None
+    image_width: Optional[int] = None
+    image_height: Optional[int] = None
 
-    def to_api(self):
-        return {"role": self.role.name, "content": self.content}
+    def to_api(self, process_image=False):
+        message = {"role": self.role.name}
+
+        if self.image_data is not None and process_image:
+            image_rgba = Image.frombytes(
+                "RGBA", (self.image_width, self.image_height), self.image_data
+            )
+            image_rgb = image_rgba.convert("RGB")
+            jpg_img = io.BytesIO()
+            image_rgb.save(jpg_img, format="JPEG")
+            base64_img = base64.b64encode(jpg_img.getvalue()).decode('utf-8')
+            message["content"] = [
+                {"type": "text", "text": self.content},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
+            ]
+            print(message)
+        else:
+            message["content"] = self.content
+
+        return message
 
 
 class ChatGPTPlugin:
@@ -92,15 +119,19 @@ class ChatGPTPlugin:
             role=ChatGPTMessageRole.system, content=self._prompt
         )
         try:
-            chat_messages = [m.to_api() for m in self._messages]
+            chat_messages = [
+                m.to_api(process_image=(i == len(self._messages) - 1))
+                for i, m in enumerate(self._messages)
+            ]
             chat_stream = await asyncio.wait_for(
                 self._client.chat.completions.create(
                     model=model,
                     n=1,
                     stream=True,
                     messages=[prompt_message.to_api()] + chat_messages,
+                    max_tokens=300,
                 ),
-                10,
+                600,
             )
         except TimeoutError:
             yield "Sorry, I'm taking too long to respond. Please try again later."
@@ -126,6 +157,7 @@ class ChatGPTPlugin:
                 break
 
             if chunk is None:
+                print(complete_response)
                 break
             content = chunk.choices[0].delta.content
 
@@ -137,8 +169,18 @@ class ChatGPTPlugin:
             if content is not None:
                 complete_response += content
                 yield content
+        
+
 
         self._messages.append(
             ChatGPTMessage(role=ChatGPTMessageRole.assistant, content=complete_response)
         )
         self._producing_response = False
+
+    def set_model(self, model: str):
+        """Change the model used by the ChatGPT plugin
+
+        Args:
+            model (str): The new model to use (e.g., 'gpt-3.5-turbo', 'gpt-4')
+        """
+        self._model = model
