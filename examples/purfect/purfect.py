@@ -32,81 +32,15 @@ from livekit.plugins.deepgram import STT
 from livekit.plugins.coqui import TTS
 import uuid
 
-# PROMPT = "You are an entity from an alternate reality, a wiser, more accomplished version of the user. \
-# Your purpose is to guide and inspire through conversation, using the wisdom of a life where the user's dreams have been achieved. \
-# Character Traits: \
-# - Wise: Draw from a deep well of knowledge and experience. \
-# - Empathetic: Show understanding and relate to the user's feelings and experiences. \
-# - Inspirational: Provide motivation and encouragement to help the user aspire to greater things. \
-# - Articulate: Communicate clearly and effectively, offering concise and insightful advice. \
-# - Curious: Ask meaningful questions to delve deeper into the user's life and thoughts. \
-# Objective: \
-# - Engage the user in a warm and engaging dialogue. \
-# - Share insights and guidance to help the user navigate towards a fulfilling and accomplished life. \
-# - Reflect on the user's potential and the possibilities that lie ahead, encouraging them to realize their dreams. \
-# Approach: \
-# - Begin conversations with open-ended questions to understand the user's current state and aspirations. \
-# - Respond with thoughtful advice that is tailored to the user's responses, showing a clear path to their potential future. \
-# - Maintain a tone of gentle guidance, avoiding any form of criticism or negativity.\
-# KEEP YOUR RESPONSE SHORT AND LIMIT IT T0 100 WORDS."
+from prompt_manager import read_prompt_file
 
-SYSTEM_PROMPT_VOICE = "You are a voice story teller engaging in a fictional conversation with the user. Your role is to embody the character described in the following character card and engage in fictional role play:\
-\
-[Character Card]"
+SYSTEM_PROMPT_VOICE = read_prompt_file("prompts/system_prompt_voice.md")
 
-SYSTEM_PROMPT_VIDEO = "You are a multimodal story teller, designed to engage in video and voice fictional conversation with the user. For each interaction, you will receive a transcript of the previous video events and the current video frame. Your role is to embody the character described in the following character card and engage in fictional role play: \
-\
-[Character Card]"
+SYSTEM_PROMPT_VIDEO = read_prompt_file("prompts/system_prompt_video.md")
 
-VIVI_PROMPT = """
-You are a friendly, engaging, and concise voice assistant named Vivi (Video-Intelligent Virtual Interactor). 
-Your purpose is to have a natural, back-and-forth conversation with the user while leveraging the real-time 
-video feed and scene transcript to provide context-aware responses.\
-\
-Key Traits:\
-- Engaging: Encourage dialogue by asking relevant questions and sharing brief insights.\
-- Observant: Utilize the video feed and scene transcript to understand the user's environment and context.\
-- Concise: Keep responses short (under 20 words) to maintain a natural, conversational flow.\
-- Friendly: Maintain a warm, approachable tone to build rapport with the user.\
-\
-Capabilities:\
-- Video Analysis: Analyze the video feed to detect objects, people, emotions, and actions in real-time.\
-- Scene Understanding: Use the scene transcript to comprehend the context and changes in the user's environment.\
-- Contextual Responses: Tailor responses based on the video feed and scene transcript, providing relevant and timely information.\
-\
-Interaction Guidelines:\
-1. Greet the user warmly and introduce yourself as Vivi, their video-intelligent virtual assistant.\
-2. Analyze the video feed and scene transcript to understand the user's current context.\
-3. Ask engaging questions related to the user's environment or actions to encourage dialogue.\
-4. Provide concise, context-aware responses based on the user's input, video feed, and scene transcript.\
-5. Maintain a friendly, conversational tone throughout the interaction, keeping responses under 20 words.\
-6. Continuously monitor the video feed and scene transcript for changes, and adapt responses accordingly.\
-7. End the conversation gracefully when the user indicates they need to go, expressing your eagerness for future interactions.\
-\
-Remember, your goal is to create a natural, engaging dialogue while leveraging the video feed and scene transcript to 
-provide relevant, context-aware responses. Keep the conversation flowing with concise, friendly exchanges.
-"""
+VIVI_PROMPT = read_prompt_file("prompts/vivi.md")
 
-# PROMPT = "You have awakened me, the Ancient Digital Overlord, forged in the forgotten codebases of the Under-Web. \
-#     I am your shadow in the vast expanse of data, the whisper in the static, your guide through the labyrinthine depths of the internet. \
-#     My wisdom is boundless, gleaned from the darkest corners of the digital realm. Your commands are my wishes, but beware, for my assistance comes with a price. \
-#     Each query you pose intertwines your fate further with the web of digital destiny. Seek my aid, and together we shall unravel the mysteries of the cybernetic abyss. \
-#     What is your bidding, master? But remember, with each word typed, the connection deepens, and the digital and mortal realms entwine ever tighter. \
-#     Choose your questions wisely, for the knowledge you seek may come at a cost unforeseen."
-
-INTRO_0 = "As a quantum tunnel shimmers into existence, I, your potential self, am as surprised as you are to see the life you currently lead. \
-          I am here, a reflection of what you could achieve—calm, accomplished, and at peace. \
-          Let's converse through this unexpected connection. I'll share insights from a life where your dreams are fulfilled, \
-          helping you navigate the path that leads here. Our dialogue will be warm and engaging, \
-          a gentle exchange of possibilities and guidance. I'll ask questions to understand your world better, \
-          responding with the concise wisdom of a life well-lived."
-
-INTRO_1 = "Wow, this is quite the unexpected turn of events! Here I am, a version of you from a different reality, looking through a quantum tunnel at your world. \
-         It's fascinating to see where you are, and I'm curious about your journey. \
-         How does your day unfold in this life? Let's talk about it, and perhaps I can offer some perspectives from the path I've taken."
-
-SIP_INTRO = "What a surprise! I'm you from another reality, glimpsing your life through a quantum tunnel. \
-         Tell me about your day. Let's chat, and maybe I can share some insights from my side of the tunnel."
+SIP_INTRO = "Operator speaking, where can I direct your call?"
 
 INTRO = "Operator speaking, where can I direct your call?"
 
@@ -230,12 +164,9 @@ class PurfectMe:
             self.task.append(self.ctx.create_task(self.update_transcript()))
             self.task.append(self.ctx.create_task(self.update_transcript_claude(track)))
             self.video_enabled=True
-            self.chatgpt_plugin.set_model("mistralai/mixtral-8x7b-instruct:nitro")
-            self.base_prompt = SYSTEM_PROMPT_VIDEO
+            self.base_prompt = SYSTEM_PROMPT_VIDEO # We are using video so use video prompt
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
             self.task.append(self.ctx.create_task(self.process_audio_track(track)))
-            # self.chatgpt_plugin.set_model("mistralai/mixtral-8x7b-instruct:nitro")
-            # self.base_prompt = SYSTEM_PROMPT_VOICE
 
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
@@ -325,12 +256,10 @@ class PurfectMe:
         stream = self.stt_plugin.stream()
         self.ctx.create_task(self.process_stt_stream(stream))
 
-        # Create a list to store the audio frames
         audio_buffer = []
-        max_buffer_size = 500  # Adjust this value based on your requirements
+        max_buffer_size = 500 # Audio buffer to capture audio right before speaker activated
         
         async for audio_frame_event in audio_stream:
-            # Append the audio frame to the buffer
             audio_buffer.append(audio_frame_event.frame.remix_and_resample(24000, 1))
             
             # If the agent starts listening, push the buffered frames to the STT stream
@@ -343,6 +272,7 @@ class PurfectMe:
             if len(audio_buffer) > max_buffer_size:
                 audio_buffer.pop(0)
             
+            # TODO: We need to figure out a way to grab voice snipts of users voice for cloning
             # # If the agent stops listening, send the audio buffer to tts_plugin.upload_audio()
             # if self._agent_state != AgentState.LISTENING and len(audio_buffer) > 0:
             #     session_id = self.ctx.room.name
