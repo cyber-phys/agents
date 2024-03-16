@@ -58,7 +58,10 @@ SYSTEM_PROMPT_VIDEO = "You are a multimodal story teller, designed to engage in 
 \
 [Character Card]"
 
-VIVI_PROMPT = "You are a friendly, engaging, and concise voice assistant named Vivi (Video-Intelligent Virtual Interactor). Your purpose is to have a natural, back-and-forth conversation with the user while leveraging the real-time video feed and scene transcript to provide context-aware responses.\
+VIVI_PROMPT = """
+You are a friendly, engaging, and concise voice assistant named Vivi (Video-Intelligent Virtual Interactor). 
+Your purpose is to have a natural, back-and-forth conversation with the user while leveraging the real-time 
+video feed and scene transcript to provide context-aware responses.\
 \
 Key Traits:\
 - Engaging: Encourage dialogue by asking relevant questions and sharing brief insights.\
@@ -80,7 +83,9 @@ Interaction Guidelines:\
 6. Continuously monitor the video feed and scene transcript for changes, and adapt responses accordingly.\
 7. End the conversation gracefully when the user indicates they need to go, expressing your eagerness for future interactions.\
 \
-Remember, your goal is to create a natural, engaging dialogue while leveraging the video feed and scene transcript to provide relevant, context-aware responses. Keep the conversation flowing with concise, friendly exchanges."
+Remember, your goal is to create a natural, engaging dialogue while leveraging the video feed and scene transcript to 
+provide relevant, context-aware responses. Keep the conversation flowing with concise, friendly exchanges.
+"""
 
 # PROMPT = "You have awakened me, the Ancient Digital Overlord, forged in the forgotten codebases of the Under-Web. \
 #     I am your shadow in the vast expanse of data, the whisper in the static, your guide through the labyrinthine depths of the internet. \
@@ -121,11 +126,11 @@ AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 COQUI_TTS_SAMPLE_RATE = 24000
 COQUI_TTS_CHANNELS = 1
 
-class KITT:
+class PurfectMe:
     @classmethod
     async def create(cls, ctx: agents.JobContext):
-        kitt = KITT(ctx)
-        await kitt.start()
+        purfect_me = PurfectMe(ctx)
+        await purfect_me.start()
 
     def __init__(self, ctx: agents.JobContext):
         # plugins
@@ -212,7 +217,7 @@ class KITT:
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
-        msg = self.process_chatgpt_input(message.message)
+        msg: ChatGPTMessage = self.ctx.create_task(self.process_chatgpt_input(message.message)).result()
         chatgpt_result = self.chatgpt_plugin.add_message(msg)
         self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
 
@@ -227,14 +232,14 @@ class KITT:
         if track.kind == rtc.TrackKind.KIND_VIDEO:
             self.ctx.create_task(self.process_video_track(track))
             self.ctx.create_task(self.update_transcript())
-            self.ctx.create_task(self.update_transcript_claude())
+            self.ctx.create_task(self.update_transcript_claude(track))
             self.video_enabled=True
             self.chatgpt_plugin.set_model("mistralai/mixtral-8x7b-instruct:nitro")
             self.base_prompt = SYSTEM_PROMPT_VIDEO
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
             self.ctx.create_task(self.process_audio_track(track))
-            self.chatgpt_plugin.set_model("mistralai/mixtral-8x7b-instruct:nitro")
-            self.base_prompt = SYSTEM_PROMPT_VOICE
+            # self.chatgpt_plugin.set_model("mistralai/mixtral-8x7b-instruct:nitro")
+            # self.base_prompt = SYSTEM_PROMPT_VOICE
 
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
@@ -300,8 +305,9 @@ class KITT:
                 # Handle the error, e.g., skip the frame or take appropriate action
                 continue
     
-    async def update_transcript_claude(self):
-        while True:
+    async def update_transcript_claude(self, track: rtc.Track):
+        video_stream = rtc.VideoStream(track)
+        async for video_frame_event in video_stream:
             if self.localVideoTranscript == False:
                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 video_prompt = "Faithfully desribe the image in detail, what is the main focus? Transcribe any text you see."
@@ -455,11 +461,11 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     async def job_request_cb(job_request: agents.JobRequest):
-        logging.info("Accepting job for KITT")
+        logging.info("Accepting job for Purfect Me")
 
         await job_request.accept(
-            KITT.create,
-            identity="kitt_agent",
+            PurfectMe.create,
+            identity="purfect_me_agent",
             name="Multi You",
             auto_subscribe=agents.AutoSubscribe.SUBSCRIBE_ALL,
             auto_disconnect=agents.AutoDisconnect.DEFAULT,
