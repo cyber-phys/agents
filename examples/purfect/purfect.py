@@ -110,8 +110,6 @@ SIP_INTRO = "What a surprise! I'm you from another reality, glimpsing your life 
 
 INTRO = "Operator speaking, where can I direct your call?"
 
-# INTRO ="Hello World"
-
 # convert intro response to a stream
 async def intro_text_stream(sip: bool):
     if sip:
@@ -119,7 +117,6 @@ async def intro_text_stream(sip: bool):
         return
 
     yield INTRO
-
 
 AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
@@ -179,11 +176,11 @@ class PurfectMe:
 
         self.audio_stream_task: asyncio.Task = None
 
+        self.tasks = []
 
-    
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
-        # self.ctx.room.on("disconnected", your_cleanup_function)
+        self.ctx.room.on("disconnected", self.on_disconnected)
 
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
         self.ctx.room.on("active_speakers_changed", self.on_active_speakers_changed)
@@ -221,7 +218,6 @@ class PurfectMe:
         chatgpt_result = self.chatgpt_plugin.add_message(msg)
         self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
 
-
     def on_track_subscribed(
         self,
         track: rtc.Track,
@@ -230,14 +226,14 @@ class PurfectMe:
     ):
         print(f"NEW TRACK {track.kind}")
         if track.kind == rtc.TrackKind.KIND_VIDEO:
-            self.ctx.create_task(self.process_video_track(track))
-            self.ctx.create_task(self.update_transcript())
-            self.ctx.create_task(self.update_transcript_claude(track))
+            self.task.append(self.ctx.create_task(self.process_video_track(track)))
+            self.task.append(self.ctx.create_task(self.update_transcript()))
+            self.task.append(self.ctx.create_task(self.update_transcript_claude(track)))
             self.video_enabled=True
             self.chatgpt_plugin.set_model("mistralai/mixtral-8x7b-instruct:nitro")
             self.base_prompt = SYSTEM_PROMPT_VIDEO
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
-            self.ctx.create_task(self.process_audio_track(track))
+            self.task.append(self.ctx.create_task(self.process_audio_track(track)))
             # self.chatgpt_plugin.set_model("mistralai/mixtral-8x7b-instruct:nitro")
             # self.base_prompt = SYSTEM_PROMPT_VOICE
 
@@ -433,16 +429,23 @@ class PurfectMe:
                 await self.audio_out.capture_frame(e.audio.data)
         await tts_stream.aclose()
 
-    def update_state(self, sending_audio: bool = None, processing: bool = None, interrupt: bool = None):
-        if interrupt is not None:
+    # TODO: We should refactor this it is hacky
+    def update_state(self, sending_audio: bool = None, processing: bool = None, interrupt: bool = None, ideal: bool = None):
+        state = AgentState.LISTENING
+        if ideal is not None:
             self._sending_audio = False
             self._processing = False
-        if sending_audio is not None:
-            self._sending_audio = sending_audio
-        if processing is not None:
-            self._processing = processing
+            state = AgentState.IDLE
+        elif interrupt is not None:
+            self._sending_audio = False
+            self._processing = False
+            state = AgentState.LISTENING
+        else:
+            if sending_audio is not None:
+                self._sending_audio = sending_audio
+            if processing is not None:
+                self._processing = processing
 
-        state = AgentState.LISTENING
         if self._sending_audio:
             state = AgentState.SPEAKING
         elif self._processing:
@@ -456,6 +459,28 @@ class PurfectMe:
         )
         self.ctx.create_task(self.ctx.room.local_participant.update_metadata(metadata))
 
+    async def disconnect_agent(self):
+        try:
+            if self.audio_stream_task:
+                self.audio_stream_task.cancel()
+        except Exception as e:
+            logging.error(f"An error occurred: {e}", exc_info=True)
+
+        for task in self.tasks:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                logging.info("Task was cancelled successfully.")
+            except Exception as e:
+                logging.error(f"An error occurred: {e}", exc_info=True)
+
+        self.update_state(ideal=True)
+        await self.ctx.disconnect()
+
+    async def on_disconnected(self):
+        logging.info(f"Participant disconnected. Disconnecting agent.")
+        await self.disconnect_agent()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
