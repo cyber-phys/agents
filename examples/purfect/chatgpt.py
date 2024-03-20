@@ -11,8 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-import os
 import logging
 import asyncio
 import openai
@@ -62,7 +60,7 @@ class ChatGPTMessage:
 class ChatGPTPlugin:
     """OpenAI ChatGPT Plugin"""
 
-    def __init__(self, prompt: str, message_capacity: int, model: str):
+    def __init__(self, prompt: str, message_capacity: int, model: str, api_key: str, base_url: Optional[str] = None):
         """
         Args:
             prompt (str): First 'system' message sent to the chat that prompts the assistant
@@ -70,7 +68,7 @@ class ChatGPTPlugin:
             model (str): Which model to use (i.e. 'gpt-3.5-turbo')
         """
         self._model = model
-        self._client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"], base_url="https://openrouter.ai/api/v1")
+        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._prompt = prompt
         self._message_capacity = message_capacity
         self._messages: List[ChatGPTMessage] = []

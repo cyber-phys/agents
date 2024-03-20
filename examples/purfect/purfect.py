@@ -31,8 +31,11 @@ from chatgpt import (
 from livekit.plugins.deepgram import STT
 from livekit.plugins.coqui import TTS
 import uuid
-
+import os
+from dotenv import load_dotenv
 from prompt_manager import read_prompt_file
+
+load_dotenv()
 
 SYSTEM_PROMPT_VOICE = read_prompt_file("prompts/system_prompt_voice.md")
 
@@ -64,19 +67,38 @@ class PurfectMe:
         await purfect_me.start()
 
     def __init__(self, ctx: agents.JobContext):
+
         # plugins
         complete_prompt_default = SYSTEM_PROMPT_VOICE + "\n" + VIVI_PROMPT
+        
         self.chatgpt_plugin = ChatGPTPlugin(
-            prompt=complete_prompt_default, message_capacity=25, model="mistralai/mixtral-8x7b-instruct:nitro"
+            prompt=complete_prompt_default, 
+            message_capacity=25, 
+            model="gpt-4-turbo-preview",
+            api_key=os.getenv("OPENAI_API_KEY", os.environ["OPENAI_API_KEY"])
         )
 
-        self.video_chatpt_plugin = ChatGPTPlugin(
-            prompt="You are a video frame transcription tool", message_capacity=25, model="anthropic/claude-3-haiku:beta"
+        self.openrouter_plugin = ChatGPTPlugin(
+            prompt=complete_prompt_default,
+            message_capacity=25, 
+            model="mistralai/mixtral-8x7b-instruct:nitro",
+            api_key=os.getenv("OPENROUTER_API_KEY", os.environ["OPENROUTER_API_KEY"]),
+            base_url="https://openrouter.ai/api/v1"
+        )
+
+        self.video_openrouter_plugin = ChatGPTPlugin(
+            prompt="You are a video frame transcription tool", 
+            message_capacity=25, 
+            model="anthropic/claude-3-haiku:beta",
+            api_key=os.getenv("OPENROUTER_API_KEY", os.environ["OPENROUTER_API_KEY"]),
+            base_url="https://openrouter.ai/api/v1"
         )
 
         self.stt_plugin = STT(
             min_silence_duration=200,
+            # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
+
         self.tts_plugin = TTS(
             # api_url="http://10.0.0.119:6666", sample_rate=COQUI_TTS_SAMPLE_RATE
         )
@@ -140,7 +162,7 @@ class PurfectMe:
                 if character_prompt:
                     complete_prompt = self.base_prompt + "\n" + character_prompt
                     if character_prompt:
-                        self.chatgpt_plugin.prompt(complete_prompt)
+                        self.openrouter_plugin.prompt(complete_prompt)
         except json.JSONDecodeError:
             logging.warning("Failed to parse data packet")
 
@@ -149,7 +171,7 @@ class PurfectMe:
         if message.deleted:
             return
         msg: ChatGPTMessage = self.ctx.create_task(self.process_chatgpt_input(message.message)).result()
-        chatgpt_result = self.chatgpt_plugin.add_message(msg)
+        chatgpt_result = self.openrouter_plugin.add_message(msg)
         self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
 
     def on_track_subscribed(
@@ -239,7 +261,7 @@ class PurfectMe:
                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 video_prompt = "Faithfully desribe the image in detail, what is the main focus? Transcribe any text you see."
                 video_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=video_prompt, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
-                vision_stream = self.video_chatpt_plugin.add_message(video_msg)
+                vision_stream = self.video_openrouter_plugin.add_message(video_msg)
                 all_text = ""
                 async for text in vision_stream:
                     # stream.push_text(text)
@@ -302,7 +324,7 @@ class PurfectMe:
                 topic="transcription",
             )
             msg = await self.process_chatgpt_input(buffered_text)
-            chatgpt_stream = self.chatgpt_plugin.add_message(msg)
+            chatgpt_stream = self.openrouter_plugin.add_message(msg)
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
             buffered_text = ""
     
@@ -311,9 +333,9 @@ class PurfectMe:
             if self.localVideoTranscript:
                 video_prompt = "Faithfully desribe the image in detail, what is the main focus? Transcribe any text you see based on the users message\n\nUser Message: " + message
                 video_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=video_prompt, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
-                vision_stream = self.video_chatpt_plugin.add_message(video_msg)
+                vision_stream = self.video_openrouter_plugin.add_message(video_msg)
                 all_text = await self.process_text_stream(vision_stream)
-                print(all_text)
+                # print(all_text)
                 last_entries = self.get_last_entries(5)
                 user_message = "Summary of the last few frames:\n\n" + last_entries + "\n\nDescription for the most recent frame: " + all_text + "\n\nUser Message: " + message
                 msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
