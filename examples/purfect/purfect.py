@@ -135,6 +135,17 @@ class PurfectMe:
         self.tasks = []
         self.run = True
 
+        self.name = "vivi"
+        self.character_prompt = VIVI_PROMPT
+        self.starting_messages = [INTRO]
+        self.voice = "voices/goldvoice.wav"
+        self.base_model = "mistralai/mixtral-8x7b-instruct:nitro"
+        self.is_video_transcription_enabled = False
+        self.is_video_transcription_continuous = False
+        self.video_transcription_model = "anthropic/claude-3-haiku:beta"
+        self.video_transcription_interval = 60
+        self.chatmodel_multimodal = False #TODO: Set this in character card
+
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
         self.ctx.room.on("participant_disconnected", self.on_disconnected_participant_wrapper)
@@ -158,12 +169,32 @@ class PurfectMe:
         try:
             data = json.loads(data_packet.data.decode())
             print(f"DATA: {data}")
-            if data.get("topic") == "character_prompt":
+            
+            topic = data.get("topic")
+            if topic == "character_prompt":
                 character_prompt = data.get("prompt")
                 if character_prompt:
                     complete_prompt = self.base_prompt + "\n" + character_prompt
-                    if character_prompt:
-                        self.openrouter_plugin.prompt(complete_prompt)
+                    self.openrouter_plugin.prompt(complete_prompt)
+            
+            elif topic == "character_card":
+                character_card = data.get("character")
+                if character_card:
+                    self.name = character_card.get("name", "")
+                    self.character_prompt = character_card.get("prompt", "")
+                    self.starting_messages = character_card.get("startingMessages", [])
+                    self.voice = character_card.get("voice", "")
+                    self.base_model = character_card.get("baseModel", "")
+                    self.is_video_transcription_enabled = character_card.get("isVideoTranscriptionEnabled", False)
+                    self.is_video_transcription_continuous = character_card.get("isVideoTranscriptionContinuous", False)
+                    self.video_transcription_model = character_card.get("videoTranscriptionModel", "")
+                    self.video_transcription_interval = int(character_card.get("videoTranscriptionInterval", 60))                    
+                    
+                    # Update the OpenRouter plugin with the new prompt
+                    complete_prompt = self.base_prompt + "\n" + self.character_prompt
+                    self.openrouter_plugin.prompt(complete_prompt)
+                    
+                    
         except json.JSONDecodeError:
             logging.warning("Failed to parse data packet")
 
@@ -199,8 +230,6 @@ class PurfectMe:
 
             # Construct the prompt with the last entries and the Bakllava prompt
             prompt = self.bakllava_prompt + "\n\n" + last_entries
-
-            # print(f"Prompt {prompt}")
 
             if self.localVideoTranscript:
                 self.bakllava_stream.push_frame(
@@ -277,7 +306,6 @@ class PurfectMe:
             await asyncio.sleep(2)
             if not self.run:
                 break
-
 
     async def process_audio_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
@@ -419,6 +447,7 @@ class PurfectMe:
         )
         self.ctx.create_task(self.ctx.room.local_participant.update_metadata(metadata))
 
+    # TODO: either agent is crashing or killing its self when participant disconnects
     async def disconnect_agent(self):
         try:
             if self.audio_stream_task:
@@ -438,7 +467,7 @@ class PurfectMe:
                 task.cancel()
 
         self.update_state(ideal=True)
-        await self.ctx.disconnect()
+        # await self.ctx.disconnect()
 
     async def on_disconnected_participant(self):
         logging.info(f"Participant disconnected: Disconnecting agent.")
