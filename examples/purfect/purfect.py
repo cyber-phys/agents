@@ -148,7 +148,7 @@ class PurfectMe:
 
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
-        self.ctx.room.on("participant_disconnected", self.on_disconnected_participant_wrapper)
+        self.ctx.room.on("participant_disconnected", self.on_disconnected_participant)
         
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
         self.ctx.room.on("active_speakers_changed", self.on_active_speakers_changed)
@@ -440,36 +440,28 @@ class PurfectMe:
         )
         self.ctx.create_task(self.ctx.room.local_participant.update_metadata(metadata))
 
-    # TODO: either agent is crashing or killing its self when participant disconnects
     async def disconnect_agent(self):
         try:
             if self.audio_stream_task:
                 self.audio_stream_task.cancel()
         except Exception as e:
-            logging.error(f"An error occurred: {e}", exc_info=True)
+            logging.error(f"An error occurred while canceling the audio stream task: {e}", exc_info=True)
 
         for task in self.tasks:
-            task.cancel()
-
-        # Wait for a short duration to allow tasks to be canceled
-        await asyncio.sleep(0.1)
-
-        # Forcefully cancel any remaining tasks
-        for task in asyncio.all_tasks():
-            if not task.done():
+            try:
                 task.cancel()
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logging.error(f"An error occurred while canceling a task: {e}", exc_info=True)
 
         self.update_state(ideal=True)
-        # await self.ctx.disconnect()
 
-    async def on_disconnected_participant(self):
-        logging.info(f"Participant disconnected: Disconnecting agent.")
+    def on_disconnected_participant(self, participant):
+        logging.info(f"Participant disconnected: {participant.identity}. Disconnecting agent.")
         self.run = False
-        await self.disconnect_agent()
-
-    def on_disconnected_participant_wrapper(self, participant):
-        print(f"\n\n\n GOOD BYE {participant.identity} \n\n\n")
-        asyncio.create_task(self.on_disconnected_participant())
+        asyncio.create_task(self.disconnect_agent())
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
