@@ -35,7 +35,7 @@ import os
 from dotenv import load_dotenv
 from prompt_manager import read_prompt_file
 
-load_dotenv()
+load_dotenv('.env')
 
 SYSTEM_PROMPT_VOICE = read_prompt_file("prompts/system_prompt_voice.md")
 
@@ -133,11 +133,12 @@ class PurfectMe:
         self.audio_stream_task: asyncio.Task = None
 
         self.tasks = []
+        self.run = True
 
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
-        self.ctx.room.on("disconnected", self.on_disconnected)
-
+        self.ctx.room.on("participant_disconnected", self.on_disconnected_participant_wrapper)
+        
         self.ctx.room.on("track_subscribed", self.on_track_subscribed)
         self.ctx.room.on("active_speakers_changed", self.on_active_speakers_changed)
 
@@ -182,13 +183,13 @@ class PurfectMe:
     ):
         print(f"NEW TRACK {track.kind}")
         if track.kind == rtc.TrackKind.KIND_VIDEO:
-            self.task.append(self.ctx.create_task(self.process_video_track(track)))
-            self.task.append(self.ctx.create_task(self.update_transcript()))
-            self.task.append(self.ctx.create_task(self.update_transcript_claude(track)))
+            self.tasks.append(self.ctx.create_task(self.process_video_track(track)))
+            self.tasks.append(self.ctx.create_task(self.update_transcript()))
+            self.tasks.append(self.ctx.create_task(self.update_transcript_claude(track)))
             self.video_enabled=True
             self.base_prompt = SYSTEM_PROMPT_VIDEO # We are using video so use video prompt
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
-            self.task.append(self.ctx.create_task(self.process_audio_track(track)))
+            self.tasks.append(self.ctx.create_task(self.process_audio_track(track)))
 
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
@@ -212,6 +213,9 @@ class PurfectMe:
             self.latest_frame = argb_frame.data
             self.latest_frame_width = frame.width
             self.latest_frame_height = frame.height
+
+            if not self.run:
+                break
 
     def on_active_speakers_changed(self, speakers: list[rtc.Participant]):
         if speakers:
@@ -271,6 +275,8 @@ class PurfectMe:
                 self.video_transcript["scene"].append(all_text)
                 self.video_transcript["time"].append(current_time)
             await asyncio.sleep(2)
+            if not self.run:
+                break
 
 
     async def process_audio_track(self, track: rtc.Track):
@@ -301,6 +307,8 @@ class PurfectMe:
             #     await self.tts_plugin.upload_audio(session_id, audio_buffer)
             #     self.tts_plugin.set_voice(session_id)
             #     audio_buffer.clear()
+            if not self.run:
+                break
 
         await stream.flush()
 
@@ -420,19 +428,26 @@ class PurfectMe:
 
         for task in self.tasks:
             task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                logging.info("Task was cancelled successfully.")
-            except Exception as e:
-                logging.error(f"An error occurred: {e}", exc_info=True)
+
+        # Wait for a short duration to allow tasks to be canceled
+        await asyncio.sleep(0.1)
+
+        # Forcefully cancel any remaining tasks
+        for task in asyncio.all_tasks():
+            if not task.done():
+                task.cancel()
 
         self.update_state(ideal=True)
         await self.ctx.disconnect()
 
-    async def on_disconnected(self):
-        logging.info(f"Participant disconnected. Disconnecting agent.")
+    async def on_disconnected_participant(self):
+        logging.info(f"Participant disconnected: Disconnecting agent.")
+        self.run = False
         await self.disconnect_agent()
+
+    def on_disconnected_participant_wrapper(self, participant):
+        print(f"\n\n\n GOOD BYE {participant.identity} \n\n\n")
+        asyncio.create_task(self.on_disconnected_participant())
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
