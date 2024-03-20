@@ -198,7 +198,7 @@ class PurfectMe:
         except json.JSONDecodeError:
             logging.warning("Failed to parse data packet")
 
-    async def on_chat_received(self, message: rtc.ChatMessage):
+    def on_chat_received(self, message: rtc.ChatMessage):
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
