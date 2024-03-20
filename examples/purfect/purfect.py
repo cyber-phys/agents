@@ -202,6 +202,9 @@ class PurfectMe:
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
+        
+        self.interupt_agent()
+
         msg: ChatGPTMessage = self.process_chatgpt_input(message.message)
         chatgpt_result = self.openrouter_plugin.add_message(msg)
         self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
@@ -246,13 +249,22 @@ class PurfectMe:
             if not self.run:
                 break
 
+    def interupt_agent(self):
+        if self._agent_state == AgentState.SPEAKING:
+            self.update_state(interrupt=True)
+            if self.audio_stream_task and not self.audio_stream_task.done():
+                self.audio_stream_task.cancel()
+
+        elif self._agent_state == AgentState.PROCESSING:
+            self.update_state(interrupt=True)
+            if self.audio_stream_task and not self.audio_stream_task.done():
+                self.audio_stream_task.cancel()
+
     def on_active_speakers_changed(self, speakers: list[rtc.Participant]):
         if speakers:
             active_speaker = speakers[0]
             logging.info(f"Active speaker: {active_speaker.identity}")
-            self.update_state(interrupt=True)
-            if self.audio_stream_task and not self.audio_stream_task.done():
-                self.audio_stream_task.cancel()
+            self.interupt_agent()
         else:
             logging.info("No active speaker")
 
@@ -383,13 +395,14 @@ class PurfectMe:
             all_text += text
         return all_text
 
+    #TODO: We still might have a rase condition if user sends messages before new one is processed
     async def process_chatgpt_result(self, text_stream):
         # ChatGPT is streamed, so we'll flip the state immediately
         self.update_state(processing=True)
 
         stream = self.tts_plugin.stream()
         self.audio_stream_task = self.ctx.create_task(self.send_audio_stream(stream))
-        all_text = await self.process_text_stream(text_stream)
+        all_text = await self.process_text_stream(text_stream) # Buffer stream until full response is recviced
         stream.push_text(all_text)
         self.update_state(processing=False)
 
