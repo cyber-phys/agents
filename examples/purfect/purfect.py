@@ -299,7 +299,7 @@ class PurfectMe:
                 async for text in vision_stream:
                     # stream.push_text(text)
                     all_text += text
-                print(all_text)
+                # print(all_text)
                 # Append the scene description and timestamp to the respective lists
                 self.video_transcript["scene"].append(all_text)
                 self.video_transcript["time"].append(current_time)

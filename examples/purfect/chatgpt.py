@@ -50,7 +50,6 @@ class ChatGPTMessage:
                 {"type": "text", "text": self.content},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
             ]
-            print(message)
         else:
             message["content"] = self.content
 
@@ -155,7 +154,6 @@ class ChatGPTPlugin:
                 break
 
             if chunk is None:
-                print(complete_response)
                 break
             content = chunk.choices[0].delta.content
 
