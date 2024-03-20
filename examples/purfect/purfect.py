@@ -198,11 +198,11 @@ class PurfectMe:
         except json.JSONDecodeError:
             logging.warning("Failed to parse data packet")
 
-    def on_chat_received(self, message: rtc.ChatMessage):
+    async def on_chat_received(self, message: rtc.ChatMessage):
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
-        msg: ChatGPTMessage = self.ctx.create_task(self.process_chatgpt_input(message.message)).result()
+        msg: ChatGPTMessage = self.process_chatgpt_input(message.message)
         chatgpt_result = self.openrouter_plugin.add_message(msg)
         self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
 
@@ -359,34 +359,27 @@ class PurfectMe:
                 ),
                 topic="transcription",
             )
-            msg = await self.process_chatgpt_input(buffered_text)
+            msg = self.process_chatgpt_input(buffered_text)
             chatgpt_stream = self.openrouter_plugin.add_message(msg)
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
             buffered_text = ""
-    
-    async def process_chatgpt_input(self, message):
+
+    def process_chatgpt_input(self, message):
         if self.video_enabled:
-            if self.localVideoTranscript:
-                video_prompt = "Faithfully desribe the image in detail, what is the main focus? Transcribe any text you see based on the users message\n\nUser Message: " + message
-                video_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=video_prompt, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
-                vision_stream = self.video_openrouter_plugin.add_message(video_msg)
-                all_text = await self.process_text_stream(vision_stream)
-                # print(all_text)
-                last_entries = self.get_last_entries(5)
-                user_message = "Summary of the last few frames:\n\n" + last_entries + "\n\nDescription for the most recent frame: " + all_text + "\n\nUser Message: " + message
-                msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
+            last_entries = self.get_last_entries(5)
+            user_message = "Summary of the last few frames: \n\n"  + last_entries + "\n\nUser Message: " + message
+            if self.chatmodel_multimodal:
+                msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
             else:
-                last_entries = self.get_last_entries(5)
-                user_message = "Summary of the last few frames: \n\n"  + last_entries + "\n\nUser Message: " + message
                 msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
         else: 
             user_message = message
             msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
         return msg
     
-    async def process_text_stream(self, vision_stream):
+    async def process_text_stream(self, text_stream):
         all_text = ""
-        async for text in vision_stream:
+        async for text in text_stream:
             all_text += text
         return all_text
 
@@ -395,11 +388,11 @@ class PurfectMe:
         self.update_state(processing=True)
 
         stream = self.tts_plugin.stream()
-        # send audio to TTS in parallel
         self.audio_stream_task = self.ctx.create_task(self.send_audio_stream(stream))
         all_text = await self.process_text_stream(text_stream)
         stream.push_text(all_text)
         self.update_state(processing=False)
+
         # buffer up the entire response from ChatGPT before sending a chat message
         await self.chat.send_message(all_text)
         await stream.flush()
