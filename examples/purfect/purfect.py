@@ -34,6 +34,9 @@ import uuid
 import os
 from dotenv import load_dotenv
 from prompt_manager import read_prompt_file
+import time
+import numpy as np
+from livekit.rtc._proto.room_pb2 import DataPacketKind
 
 load_dotenv('.env')
 
@@ -106,6 +109,7 @@ class PurfectMe:
         self.ctx: agents.JobContext = ctx
         self.chat = rtc.ChatManager(ctx.room)
         self.audio_out = rtc.AudioSource(COQUI_TTS_SAMPLE_RATE, COQUI_TTS_CHANNELS)
+        self.audio_out_gain = 1.0
 
         self._sending_audio = False
         self._processing = False
@@ -150,7 +154,11 @@ class PurfectMe:
         self.start_of_message = True
 
         self.last_agent_message = None
+        self.last_user_message = None
         self._agent_interupted = False
+
+        self.user_tts_lock = asyncio.Lock()
+        self.process_chatgpt_result_task_handle = None
 
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
@@ -280,7 +288,9 @@ class PurfectMe:
         if speakers:
             active_speaker = speakers[0]
             logging.info(f"Active speaker: {active_speaker.identity}")
-            self.interupt_agent()
+            # self.interupt_agent()
+            self.update_state(interrupt=True)
+            self.audio_out_gain = 0.5
         else:
             logging.info("No active speaker")
 
@@ -378,8 +388,7 @@ class PurfectMe:
                 continue
             stream.push_frame(audio_frame_event.frame)
         await stream.flush()
-
-    # TODO: create local log of all voice transcriptions 
+    
     async def process_user_stt_stream(self, stream):
         buffered_text = ""
         async for event in stream:
@@ -390,20 +399,46 @@ class PurfectMe:
 
             if not event.end_of_speech:
                 continue
-            await self.ctx.room.local_participant.publish_data(
-                json.dumps(
-                    {
-                        "text": buffered_text,
-                        "timestamp": int(datetime.now().timestamp() * 1000),
-                        "speaker": "user",
-                    }
-                ),
-                topic="transcription",
-            )
-            msg = self.process_chatgpt_input(buffered_text)
-            chatgpt_stream = self.openrouter_plugin.add_message(msg)
-            self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
-            buffered_text = ""
+            chat_message = rtc.ChatMessage(message=buffered_text)
+            async with self.user_tts_lock:
+                if self.process_chatgpt_result_task_handle is None or self.process_chatgpt_result_task_handle.done():
+                    await self.ctx.room.local_participant.publish_data(
+                        payload=json.dumps(chat_message.asjsondict()),
+                        kind=DataPacketKind.KIND_RELIABLE,
+                        topic="lk-chat-topic",
+                    )           
+                    self.openrouter_plugin.interrupt_and_pop_user_message(buffered_text)
+                    msg = self.process_chatgpt_input(buffered_text)
+                    self.last_user_message = chat_message
+                    chatgpt_stream = self.openrouter_plugin.add_message(msg)
+                    self.process_chatgpt_result_task_handle = self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
+                    self.process_chatgpt_result_task_handle.add_done_callback(self.clear_process_chatgpt_result_handle)
+                    buffered_text = ""
+                else:
+                    start_time = time.time()
+                    self.process_chatgpt_result_task_handle.cancel()
+                    try:
+                        await self.process_chatgpt_result_task_handle
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as e:
+                        logging.error(f"An error occurred while awaiting process_chatgpt_result_task_handle: {e}")
+                        pass
+                    end_time = time.time()
+                    elapsed_time = end_time - start_time
+                    logging.info(f"Time taken to cancel and move past the code block: {elapsed_time:.5f} seconds")
+                    last_message_content = self.last_user_message.message
+                    self.openrouter_plugin.interrupt_and_pop_user_message(last_message_content)
+                    # Update the message content with the new buffered_text
+                    updated_message_content = last_message_content + buffered_text
+                    # Update the "message" field of self.last_user_message
+                    self.last_user_message.message = updated_message_content
+                    # Send the updated message using self.chat.update_message
+                    await self.chat.update_message(self.last_user_message)
+
+                    self.process_chatgpt_result_task_handle = self.ctx.create_task(self.process_chatgpt_result(self.last_user_message.message))
+                    self.process_chatgpt_result_task_handle.add_done_callback(self.clear_process_chatgpt_result_handle)
+                    buffered_text = ""
 
     # TODO: create local log of all voice transcriptions 
     async def process_agent_stt_stream(self, stream):
@@ -465,21 +500,31 @@ class PurfectMe:
             all_text += text
         return all_text
 
-    #TODO: We still might have a rase condition if user sends messages before new one is processed
     async def process_chatgpt_result(self, text_stream):
-        # ChatGPT is streamed, so we'll flip the state immediately
-        self.update_state(processing=True)
+        self.audio_out_gain = 1.0
+        try:
+            # ChatGPT is streamed, so we'll flip the state immediately
+            self.update_state(processing=True)
 
-        stream = self.tts_plugin.stream()
-        self.audio_stream_task = self.ctx.create_task(self.send_audio_stream(stream))
-        all_text = await self.process_text_stream(text_stream) # Buffer stream until full response is recviced
-        self.agent_transcription = ""
-        stream.push_text(all_text)
-        self.update_state(processing=False)
+            stream = self.tts_plugin.stream()
+            self.audio_stream_task = self.ctx.create_task(self.send_audio_stream(stream))
+            all_text = await self.process_text_stream(text_stream)  # Buffer stream until full response is received
+            self.agent_transcription = ""
+            stream.push_text(all_text)
 
-        # buffer up the entire response from ChatGPT before sending a chat message
-        # await self.chat.send_message(all_text) #TODO uncomment this but we need to figure out how to both stream agent transcript and send the actually text from chat gpt
-        await stream.flush()
+            # buffer up the entire response from ChatGPT before sending a chat message
+            # await self.chat.send_message(all_text) #TODO uncomment this but we need to figure out how to both stream agent transcript and send the actually text from chat gpt
+            await stream.flush()
+
+        except asyncio.CancelledError:
+            # Handle the cancellation gracefully
+            if self.audio_stream_task and not self.audio_stream_task.done():
+                self.audio_stream_task.cancel()
+                await stream.aclose()  # Close the stream properly
+            raise  # Re-raise the CancelledError to propagate the cancellation
+
+        finally:
+            self.update_state(processing=False)
 
     async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent]):
         async for e in tts_stream:
@@ -491,8 +536,25 @@ class PurfectMe:
                 if self._agent_state == AgentState.LISTENING:
                     # Stop the audio stream if the agent is listening
                     break
+            
+                # Convert memoryview to NumPy array
+                audio_data = np.frombuffer(e.audio.data.data, dtype=np.int16)
+                
+                # Adjust the audio level
+                adjusted_audio_data = (audio_data * self.audio_out_gain).astype(np.int16)
+                
+                # Convert the adjusted audio data back to memoryview
+                adjusted_audio_data_memoryview = adjusted_audio_data.tobytes()
+                
+                # Create a new AudioFrame with the adjusted audio data
+                adjusted_audio_frame = rtc.AudioFrame(
+                    data=adjusted_audio_data_memoryview,
+                    sample_rate=e.audio.data.sample_rate,
+                    num_channels=e.audio.data.num_channels,
+                    samples_per_channel=e.audio.data.samples_per_channel,
+                )
 
-                await self.audio_out.capture_frame(e.audio.data)
+                await self.audio_out.capture_frame(adjusted_audio_frame)
 
         await tts_stream.aclose()
 
@@ -529,6 +591,14 @@ class PurfectMe:
             }
         )
         self.ctx.create_task(self.ctx.room.local_participant.update_metadata(metadata))
+    
+    def clear_process_chatgpt_result_handle(self, task):
+        try:
+            task.result()
+            self.process_chatgpt_result_task_handle = None
+        except asyncio.CancelledError:
+            logging.info("Canceled process_chatgpt_result task was terminated")
+            pass
 
     async def disconnect_agent(self):
         try:
