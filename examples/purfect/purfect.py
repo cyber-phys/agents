@@ -150,6 +150,7 @@ class PurfectMe:
         self.start_of_message = True
 
         self.last_agent_message = None
+        self._agent_interupted = False
 
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
@@ -210,7 +211,7 @@ class PurfectMe:
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
-        
+                
         self.interupt_agent()
 
         msg: ChatGPTMessage = self.process_chatgpt_input(message.message)
@@ -262,16 +263,18 @@ class PurfectMe:
     def interupt_agent(self):
         if self._agent_state == AgentState.SPEAKING:
             print(f"\n\n{self.agent_transcription}\n\n")
-            self.agent_transcription = ""
             self.update_state(interrupt=True)
             if self.audio_stream_task and not self.audio_stream_task.done():
                 self.audio_stream_task.cancel()
+                self.openrouter_plugin.interrupt(self.agent_transcription)
+            self.agent_transcription = ""
 
         # TODO: WE NEED to Stop chatgpt generation from conintuing
         elif self._agent_state == AgentState.THINKING:
             self.update_state(interrupt=True)
             if self.audio_stream_task and not self.audio_stream_task.done():
                 self.audio_stream_task.cancel()
+                self.openrouter_plugin.interrupt_with_user_message()
 
     def on_active_speakers_changed(self, speakers: list[rtc.Participant]):
         if speakers:
@@ -504,6 +507,7 @@ class PurfectMe:
             self._sending_audio = False
             self._processing = False
             state = AgentState.LISTENING
+            self._agent_interupted = True
         else:
             if sending_audio is not None:
                 self._sending_audio = sending_audio
@@ -512,10 +516,11 @@ class PurfectMe:
 
         if self._sending_audio:
             state = AgentState.SPEAKING
+            self._agent_interupted = False
         elif self._processing:
             state = AgentState.THINKING
             self.start_of_message = True
-
+            self._agent_interupted = False
 
         self._agent_state = state
         metadata = json.dumps(

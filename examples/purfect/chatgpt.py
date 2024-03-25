@@ -73,12 +73,33 @@ class ChatGPTPlugin:
         self._messages: List[ChatGPTMessage] = []
         self._producing_response = False
         self._needs_interrupt = False
+        self._save_response = True
 
     def interrupt(self):
         """Interrupt a currently streaming response (if there is one)"""
         if self._producing_response:
             self._needs_interrupt = True
+    
+    def interrupt(self, new_text: str):
+        """Interrupt a currently streaming response (if there is one) and replace the last assistant message with the provided text"""
+        if self._producing_response:
+            self._needs_interrupt = True
+            while self._producing_response:
+                asyncio.sleep(0.01)
+                
+        if self._messages and self._messages[-1].role == ChatGPTMessageRole.assistant:
+            self._messages[-1].content = new_text
 
+    def interrupt_with_user_message(self, append_text: Optional[str] = None):
+        """Interrupt a currently streaming response (if there is one) and clear assistant message"""
+        if self._producing_response:
+            self._save_response = False
+            self._needs_interrupt = True
+        
+        else:
+            if self._messages and self._messages[-1].role == ChatGPTMessageRole.assistant:
+                self._messages.pop()
+        
     async def aclose(self):
         pass
 
@@ -165,10 +186,13 @@ class ChatGPTPlugin:
             if content is not None:
                 complete_response += content
                 yield content
-        
-        self._messages.append(
-            ChatGPTMessage(role=ChatGPTMessageRole.assistant, content=complete_response)
-        )
+
+        if self._save_response:
+            self._messages.append(
+                ChatGPTMessage(role=ChatGPTMessageRole.assistant, content=complete_response)
+            )
+
+        self._save_response = True
         self._producing_response = False
 
     def set_model(self, model: str):
