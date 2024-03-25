@@ -94,7 +94,7 @@ class ChatGPTPlugin:
         """Interrupt a currently streaming response (if there is one) and clear assistant message"""
         if self._producing_response:
             self._save_response = False
-            self._needs_interrupt = True
+            # self._needs_interrupt = True
         
         else:
             if self._messages and self._messages[-1].role == ChatGPTMessageRole.assistant:
@@ -103,20 +103,21 @@ class ChatGPTPlugin:
     def interrupt_and_pop_user_message(self, text: str):
         """Interrupt a currently streaming response (if there is one) and clear assistant message"""
         if self._producing_response:
-            self._save_response = False
             self._needs_interrupt = True
-
+            while self._producing_response:
+                asyncio.sleep(0.01)
         # Check the last 2 user messages
         for i in range(len(self._messages)-1, -1, -1):
-            if self._messages[i].role == ChatGPTMessageRole.user:
-                if isinstance(self._messages[i].content, str) and text in self._messages[i].content:
+            message = self._messages[i]
+            if isinstance(message, ChatGPTMessage) and message.role == ChatGPTMessageRole.user:
+                if isinstance(message.content, str) and text in message.content:
                     # If the append_text is found in the user message content, 
                     # remove this message and all messages after it
                     self._messages = self._messages[:i]
                     break
                 
-                if isinstance(self._messages[i].content, list):
-                    for item in self._messages[i].content:
+                if isinstance(message.content, list):
+                    for item in message.content:
                         if item["type"] == "text" and text in item["text"]:
                             # If the append_text is found in the user message content,
                             # remove this message and all messages after it 
@@ -126,6 +127,11 @@ class ChatGPTPlugin:
                     # Break out of the outer loop if append_text was found
                     if len(self._messages) == i:
                         break
+            elif isinstance(message, str) and text in message:
+                # If the message is a string and append_text is found in it,
+                # remove this message and all messages after it
+                self._messages = self._messages[:i]
+                break
         
     async def aclose(self):
         pass

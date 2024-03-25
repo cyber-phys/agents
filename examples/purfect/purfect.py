@@ -391,17 +391,33 @@ class PurfectMe:
     
     async def process_user_stt_stream(self, stream):
         buffered_text = ""
+        start_talking_flag = False
+        still_talking_flag = False
+        last_event_time = 0
         async for event in stream:
+            if not start_talking_flag:
+                start_talking_time = time.time()
+                start_talking_flag = True
+
             if event.alternatives[0].text == "":
                 continue
+
             if event.is_final:
                 buffered_text = " ".join([buffered_text, event.alternatives[0].text])
 
             if not event.end_of_speech:
                 continue
+
+            elapsed_time = start_talking_time - last_event_time
+            print(f"Elapsed time between last two events: {elapsed_time:.2f} seconds")
+            if last_event_time != 0 and elapsed_time <= 2:
+                still_talking_flag = True
+            last_event_time = time.time()
+            start_talking_flag = False
+
             chat_message = rtc.ChatMessage(message=buffered_text)
             async with self.user_tts_lock:
-                if self.process_chatgpt_result_task_handle is None or self.process_chatgpt_result_task_handle.done():
+                if (self.process_chatgpt_result_task_handle is None or self.process_chatgpt_result_task_handle.done()) and not still_talking_flag:
                     await self.ctx.room.local_participant.publish_data(
                         payload=json.dumps(chat_message.asjsondict()),
                         kind=DataPacketKind.KIND_RELIABLE,
@@ -415,18 +431,20 @@ class PurfectMe:
                     self.process_chatgpt_result_task_handle.add_done_callback(self.clear_process_chatgpt_result_handle)
                     buffered_text = ""
                 else:
+                    still_talking_flag = False
                     start_time = time.time()
-                    self.process_chatgpt_result_task_handle.cancel()
-                    try:
-                        await self.process_chatgpt_result_task_handle
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception as e:
-                        logging.error(f"An error occurred while awaiting process_chatgpt_result_task_handle: {e}")
-                        pass
-                    end_time = time.time()
-                    elapsed_time = end_time - start_time
-                    logging.info(f"Time taken to cancel and move past the code block: {elapsed_time:.5f} seconds")
+                    if self.process_chatgpt_result_task_handle is not None:
+                        self.process_chatgpt_result_task_handle.cancel()
+                        try:
+                            await self.process_chatgpt_result_task_handle
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as e:
+                            logging.error(f"An error occurred while awaiting process_chatgpt_result_task_handle: {e}")
+                            pass
+                        end_time = time.time()
+                        elapsed_time = end_time - start_time
+                        logging.info(f"Time taken to cancel and move past the code block: {elapsed_time:.5f} seconds")
                     last_message_content = self.last_user_message.message
                     self.openrouter_plugin.interrupt_and_pop_user_message(last_message_content)
                     # Update the message content with the new buffered_text
@@ -435,8 +453,9 @@ class PurfectMe:
                     self.last_user_message.message = updated_message_content
                     # Send the updated message using self.chat.update_message
                     await self.chat.update_message(self.last_user_message)
-
-                    self.process_chatgpt_result_task_handle = self.ctx.create_task(self.process_chatgpt_result(self.last_user_message.message))
+                    msg = self.process_chatgpt_input(self.last_user_message.message)
+                    chatgpt_stream = self.openrouter_plugin.add_message(msg)
+                    self.process_chatgpt_result_task_handle = self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
                     self.process_chatgpt_result_task_handle.add_done_callback(self.clear_process_chatgpt_result_handle)
                     buffered_text = ""
 
@@ -495,10 +514,14 @@ class PurfectMe:
         return msg
     
     async def process_text_stream(self, text_stream):
-        all_text = ""
-        async for text in text_stream:
-            all_text += text
-        return all_text
+        try:
+            all_text = ""
+            async for text in text_stream:
+                all_text += text
+            return all_text
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            raise
 
     async def process_chatgpt_result(self, text_stream):
         self.audio_out_gain = 1.0
@@ -522,6 +545,9 @@ class PurfectMe:
                 self.audio_stream_task.cancel()
                 await stream.aclose()  # Close the stream properly
             raise  # Re-raise the CancelledError to propagate the cancellation
+
+        except:
+            pass
 
         finally:
             self.update_state(processing=False)
