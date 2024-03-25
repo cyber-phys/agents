@@ -146,6 +146,11 @@ class PurfectMe:
         self.video_transcription_interval = 60
         self.chatmodel_multimodal = False #TODO: Set this in character card
 
+        self.agent_transcription = ""
+        self.start_of_message = True
+
+        self.last_agent_message = None
+
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
         self.ctx.room.on("participant_disconnected", self.on_disconnected_participant)
@@ -156,6 +161,9 @@ class PurfectMe:
         # publish audio track
         track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
         await self.ctx.room.local_participant.publish_track(track)
+
+        self.tasks.append(self.ctx.create_task(self.process_agent_audio_track(track)))
+
 
         # allow the participant to fully subscribe to the agent's audio track, so it doesn't miss
         # anything in the beginning
@@ -223,7 +231,8 @@ class PurfectMe:
             self.video_enabled=True
             self.base_prompt = SYSTEM_PROMPT_VIDEO # We are using video so use video prompt
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
-            self.tasks.append(self.ctx.create_task(self.process_audio_track(track)))
+            self.tasks.append(self.ctx.create_task(self.process_user_audio_track(track)))
+
 
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
@@ -249,13 +258,17 @@ class PurfectMe:
             if not self.run:
                 break
 
+    #TODO We should wait for tts to finish
     def interupt_agent(self):
         if self._agent_state == AgentState.SPEAKING:
+            print(f"\n\n{self.agent_transcription}\n\n")
+            self.agent_transcription = ""
             self.update_state(interrupt=True)
             if self.audio_stream_task and not self.audio_stream_task.done():
                 self.audio_stream_task.cancel()
 
-        elif self._agent_state == AgentState.PROCESSING:
+        # TODO: WE NEED to Stop chatgpt generation from conintuing
+        elif self._agent_state == AgentState.THINKING:
             self.update_state(interrupt=True)
             if self.audio_stream_task and not self.audio_stream_task.done():
                 self.audio_stream_task.cancel()
@@ -319,10 +332,10 @@ class PurfectMe:
             if not self.run:
                 break
 
-    async def process_audio_track(self, track: rtc.Track):
+    async def process_user_audio_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
         stream = self.stt_plugin.stream()
-        self.ctx.create_task(self.process_stt_stream(stream))
+        self.ctx.create_task(self.process_user_stt_stream(stream))
 
         audio_buffer = []
         max_buffer_size = 500 # Audio buffer to capture audio right before speaker activated
@@ -352,7 +365,19 @@ class PurfectMe:
 
         await stream.flush()
 
-    async def process_stt_stream(self, stream):
+    async def process_agent_audio_track(self, track: rtc.Track):
+        audio_stream = rtc.AudioStream(track)
+        stream = self.stt_plugin.stream()
+        self.ctx.create_task(self.process_agent_stt_stream(stream))
+
+        async for audio_frame_event in audio_stream:
+            if self._agent_state != AgentState.SPEAKING:
+                continue
+            stream.push_frame(audio_frame_event.frame)
+        await stream.flush()
+
+    # TODO: create local log of all voice transcriptions 
+    async def process_user_stt_stream(self, stream):
         buffered_text = ""
         async for event in stream:
             if event.alternatives[0].text == "":
@@ -367,6 +392,7 @@ class PurfectMe:
                     {
                         "text": buffered_text,
                         "timestamp": int(datetime.now().timestamp() * 1000),
+                        "speaker": "user",
                     }
                 ),
                 topic="transcription",
@@ -376,6 +402,47 @@ class PurfectMe:
             self.ctx.create_task(self.process_chatgpt_result(chatgpt_stream))
             buffered_text = ""
 
+    # TODO: create local log of all voice transcriptions 
+    async def process_agent_stt_stream(self, stream):
+        buffered_text = ""
+        async for event in stream:
+            if event.alternatives[0].text == "":
+                continue
+
+            if event.is_final:
+                buffered_text = " ".join([buffered_text, event.alternatives[0].text])
+                self.agent_transcription = " ".join([self.agent_transcription, event.alternatives[0].text])
+
+            if not event.end_of_speech:
+                continue
+            
+            if self.start_of_message:
+                self.start_of_message = False
+                self.last_agent_message = await self.chat.send_message(buffered_text)
+            else:
+                # Extract the "message" from self.last_agent_message
+                last_message_content = self.last_agent_message.message
+
+                # Update the message content with the new buffered_text
+                updated_message_content = last_message_content + buffered_text
+
+                # Update the "message" field of self.last_agent_message
+                self.last_agent_message.message = updated_message_content
+
+                # Send the updated message using self.chat.update_message
+                await self.chat.update_message(self.last_agent_message)
+            # await self.ctx.room.local_participant.publish_data(
+            #     json.dumps(
+            #         {
+            #             "text": buffered_text,
+            #             "timestamp": int(datetime.now().timestamp() * 1000),
+            #             "speaker": "agent",
+            #         }
+            #     ),
+            #     topic="transcription",
+            # )
+            buffered_text = ""
+            
     def process_chatgpt_input(self, message):
         if self.video_enabled:
             last_entries = self.get_last_entries(5)
@@ -403,11 +470,12 @@ class PurfectMe:
         stream = self.tts_plugin.stream()
         self.audio_stream_task = self.ctx.create_task(self.send_audio_stream(stream))
         all_text = await self.process_text_stream(text_stream) # Buffer stream until full response is recviced
+        self.agent_transcription = ""
         stream.push_text(all_text)
         self.update_state(processing=False)
 
         # buffer up the entire response from ChatGPT before sending a chat message
-        await self.chat.send_message(all_text)
+        # await self.chat.send_message(all_text) #TODO uncomment this but we need to figure out how to both stream agent transcript and send the actually text from chat gpt
         await stream.flush()
 
     async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent]):
@@ -420,7 +488,9 @@ class PurfectMe:
                 if self._agent_state == AgentState.LISTENING:
                     # Stop the audio stream if the agent is listening
                     break
+
                 await self.audio_out.capture_frame(e.audio.data)
+
         await tts_stream.aclose()
 
     # TODO: We should refactor this it is hacky
@@ -444,6 +514,8 @@ class PurfectMe:
             state = AgentState.SPEAKING
         elif self._processing:
             state = AgentState.THINKING
+            self.start_of_message = True
+
 
         self._agent_state = state
         metadata = json.dumps(
