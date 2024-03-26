@@ -500,14 +500,15 @@ class PurfectMe:
 
                         self.audio_out_gain = 1.0
                         self.update_state(processing=True)
-                        # send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event))
+                        send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
                         if not stop_event.is_set(): 
                             result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
                         if not stop_event.is_set():  # Only push the result if the stop event is not set
                             stream.push_text(result)
                             await stream.flush()
                         if not stop_event.is_set(): 
-                            await self.send_audio_stream(stream, stop_event, False)
+                            # await self.send_audio_stream(stream, stop_event, False)
+                            await send_audio_task
 
                     else:
                         print("New message")
@@ -529,14 +530,15 @@ class PurfectMe:
                         
                         self.audio_out_gain = 1.0
 
-                        # send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event))
+                        send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
                         if not stop_event.is_set():  # Only push the result if the stop event is not set
                             result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
                         if not stop_event.is_set():  # Only push the result if the stop event is not set
                             stream.push_text(result)                    
                             await stream.flush()
                         if not stop_event.is_set():  # Only push the result if the stop event is not set
-                            await self.send_audio_stream(stream, stop_event, False)
+                            # await self.send_audio_stream(stream, stop_event, False)
+                            await send_audio_task
 
                 except StopProcessingException:
                     logging.info("Chat message processing was stopped due to stop event.")
