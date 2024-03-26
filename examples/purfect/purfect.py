@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+from asyncore import loop
 from datetime import datetime
 from enum import Enum
 import json
@@ -65,6 +66,10 @@ AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 COQUI_TTS_SAMPLE_RATE = 24000
 COQUI_TTS_CHANNELS = 1
 
+class StopProcessingException(Exception):
+    """Raised when the processing should be stopped immediately."""
+    pass
+
 class PurfectMe:
     @classmethod
     async def create(cls, ctx: agents.JobContext):
@@ -76,6 +81,7 @@ class PurfectMe:
         self.stt_user_queue = Queue()
         self.stt_user_consumer_task = None
         self.user_chat_message_stop_events = []
+        self.process_user_chat_lock = threading.Lock()
 
         # plugins
         complete_prompt_default = SYSTEM_PROMPT_VOICE + "\n" + VIVI_PROMPT
@@ -448,6 +454,7 @@ class PurfectMe:
 
             # Stop all previous running process_user_chat_message jobs
             if self.user_chat_message_stop_events:
+                print("stoping thread")
                 for stop_event in self.user_chat_message_stop_events:
                     stop_event.set()
 
@@ -463,56 +470,6 @@ class PurfectMe:
             is_first_uterance = False
         print("STOPED process_user_stt_stream")
 
-
-    # #TODO: is there a better way to handel timer?
-    # def process_user_stt_stream(self, stream):
-    #     async def process_tts_stream():
-    #         print("STARTED process_user_stt_stream")
-    #         buffered_text = ""
-    #         same_uterance_timeout = 2 # Time in seconds in which to count stt result as the same uterance as previous result
-    #         uterance_time = 0
-    #         start_of_uterance = True
-    #         async for event in stream:
-    #             print("AUDIOAUDIO")
-    #             if event.alternatives[0].text == "":
-    #                 continue
-    #             elif start_of_uterance:
-    #                 uterance_time = time.time()
-    #                 start_of_uterance = False
-
-    #             if event.is_final:
-    #                 buffered_text = " ".join([buffered_text, event.alternatives[0].text])
-
-    #             if not event.end_of_speech:
-    #                 continue
-
-    #             if buffered_text == "":
-    #                 continue
-                
-    #             same_uterance = False
-    #             if time.time() - uterance_time <= same_uterance_timeout and uterance_time != 0:
-    #                 same_uterance = True
-
-    #             # Stop all previous running process_user_chat_message jobs
-    #             for stop_event in self.user_chat_message_stop_events.values():
-    #                 stop_event.set()
-
-    #             # Create a new stop event for the current uterance
-    #             stop_event = threading.Event()
-    #             self.user_chat_message_stop_events.append(stop_event)
-
-    #             # Start a new thread for processing the user chat message
-    #             threading.Thread(target=self.process_user_chat_message, args=(buffered_text, same_uterance, stop_event)).start()
-    #             print(f"Create new task: {buffered_text}")
-    #             buffered_text = ""
-    #         print("STOPED process_user_stt_stream")
-        
-    #     def run_process_tts_stream():
-    #         asyncio.run(process_tts_stream())
-        
-    #     threading.Thread(target=run_process_tts_stream).start()
-
-
     # TODO we should have a finished event
     # TODO log if we are waiting on lock
     def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: threading.Event):
@@ -520,62 +477,80 @@ class PurfectMe:
             tts = TTS(
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
             )
-            async with self.user_tts_lock:
-                if same_uterance and self.last_agent_message is not None:
-                    print("Updating Message")
-                    last_message_content = self.last_user_message.message
-                    self.openrouter_plugin.interrupt_and_pop_user_message(last_message_content)
-                    # Update the message content with the new buffered_text
-                    updated_message_content = last_message_content + uterance
-                    # Update the "message" field of self.last_user_message
-                    self.last_user_message.message = updated_message_content
-                    # Send the updated message using self.chat.update_message
+            with self.process_user_chat_lock:
+                try:
+                    if same_uterance and self.last_agent_message is not None:
+                        print("Updating Message")
+                        self.update_state(processing=True)
+                        stream = tts.stream()
+                        last_message_content = self.last_user_message.message
+                        self.openrouter_plugin.interrupt_and_pop_user_message(last_message_content)
+                        # Update the message content with the new buffered_text
+                        updated_message_content = last_message_content + uterance
+                        # Update the "message" field of self.last_user_message
+                        self.last_user_message.message = updated_message_content
+                        # Send the updated message using self.chat.update_message
 
-                    await self.chat.update_message(self.last_user_message)
+                        await self.chat.update_message(self.last_user_message)
 
-                    msg = self.process_chatgpt_input(self.last_user_message.message)
-                    chatgpt_stream = self.openrouter_plugin.add_message(msg)
+                        msg = self.process_chatgpt_input(self.last_user_message.message)
 
-                    self.audio_out_gain = 1.0
+                        if not stop_event.is_set():  # Only push the result if the stop event is not set
+                            chatgpt_stream = self.openrouter_plugin.add_message(msg)
+
+                        self.audio_out_gain = 1.0
+                        self.update_state(processing=True)
+                        # send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event))
+                        if not stop_event.is_set(): 
+                            result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
+                        if not stop_event.is_set():  # Only push the result if the stop event is not set
+                            stream.push_text(result)
+                            await stream.flush()
+                        if not stop_event.is_set(): 
+                            await self.send_audio_stream(stream, stop_event, False)
+
+                    else:
+                        print("New message")
+                        self.update_state(processing=True)
+                        stream = tts.stream()
+                        chat_message = rtc.ChatMessage(message=uterance)
+                        # TODO: Write user chat update method
+                        
+                        await self.ctx.room.local_participant.publish_data(
+                            payload=json.dumps(chat_message.asjsondict()),
+                            kind=DataPacketKind.KIND_RELIABLE,
+                            topic="lk-chat-topic",
+                        )
+
+                        self.openrouter_plugin.interrupt_and_pop_user_message(uterance)
+                        msg = self.process_chatgpt_input(uterance)
+                        self.last_user_message = chat_message
+                        chatgpt_stream = self.openrouter_plugin.add_message(msg)
+                        
+                        self.audio_out_gain = 1.0
+
+                        # send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event))
+                        if not stop_event.is_set():  # Only push the result if the stop event is not set
+                            result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
+                        if not stop_event.is_set():  # Only push the result if the stop event is not set
+                            stream.push_text(result)                    
+                            await stream.flush()
+                        if not stop_event.is_set():  # Only push the result if the stop event is not set
+                            await self.send_audio_stream(stream, stop_event, False)
+
+                except StopProcessingException:
+                    logging.info("Chat message processing was stopped due to stop event.")
+                except Exception as e:
+                    logging.error(f"An unexpected error occurred in process_user_chat_message: {e}", exc_info=True)
+                finally:
+                    # if chatgpt_stream:
+                    #     await self.openrouter_plugin.aclose()
+                    await stream.aclose()
                     self.update_state(processing=False)
-                    stream = tts.stream()
-                    send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event))
-                    result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
-                    stream.push_text(result)
-                    await stream.flush()
-                    await stream.aclose()  # Close the stream after sending the audio
-                    await send_audio_task  # Wait for the send_audio_task to complete
-
-                else:
-                    print("New message")
-                    chat_message = rtc.ChatMessage(message=uterance)
-                    # TODO: Write user chat update method
-                    
-                    await self.ctx.room.local_participant.publish_data(
-                        payload=json.dumps(chat_message.asjsondict()),
-                        kind=DataPacketKind.KIND_RELIABLE,
-                        topic="lk-chat-topic",
-                    )
-
-                    self.openrouter_plugin.interrupt_and_pop_user_message(uterance)
-                    msg = self.process_chatgpt_input(uterance)
-                    self.last_user_message = chat_message
-                    chatgpt_stream = self.openrouter_plugin.add_message(msg)
-                    
-                    self.audio_out_gain = 1.0
-                    self.update_state(processing=False)
-                    stream = tts.stream()
-                    send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event))
-                    result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
-                    stream.push_text(result)
-                    await stream.flush()
-                    await stream.aclose()  # Close the stream after sending the audio
-                    await send_audio_task  # Wait for the send_audio_task to complete
+                    print("EXITED process chat message")
 
         def run_async_chat_message():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(process_chat_message())
+            asyncio.run(process_chat_message())
 
         threading.Thread(target=run_async_chat_message).start()
 
@@ -725,12 +700,12 @@ class PurfectMe:
             all_text = ""
             async for text in text_stream:
                 if stop_event is not None and stop_event.is_set():
-                    print("STOP EVENT")
+                    print("STOP EVENT text stream")
                     break
                 all_text += text
             
             if stop_event is not None and stop_event.is_set():
-                print("STOP EVENT")
+                print("STOP EVENT text stream return")
                 self.update_state(processing=False)
                 return
             
@@ -754,60 +729,64 @@ class PurfectMe:
             all_text = ""
             async for text in text_stream:
                 if stop_event is not None and stop_event.is_set():
-                    print("STOP EVENT")
-                    break
+                    print("STOP EVENT process text stream")
+                    raise StopProcessingException("Stop event set, halting text stream processing.")
                 all_text += text
             
             if stop_event is not None and stop_event.is_set():
-                print("STOP EVENT")
-                self.update_state(processing=False)
-                return
+                print("STOP EVENT process text stream")
+                raise StopProcessingException("Stop event set, halting text stream processing.")
             
             print(all_text)
-            
             return(all_text)
 
         except Exception as e:
             logging.error(f"An error occurred while processing ChatGPT result: {e}", exc_info=True)
+            raise e
 
-    async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent], stop_event: threading.Event = None):
+    async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent], stop_event: threading.Event = None, close_stream: bool = True):
         print("Yaping")
-        async for e in tts_stream:
-            print("talking")
-            if stop_event is not None and stop_event.is_set():
-                print("STOP EVENT")
-                self.update_state(sending_audio=False)
-                break
+        try:
+            async for e in tts_stream:
+                if stop_event is not None and stop_event.is_set():
+                    print("STOP EVENT send audio")
+                    raise StopProcessingException("Stop event set, halting text stream processing.")
 
-            if e.type == SynthesisEventType.STARTED:
-                self.update_state(sending_audio=True)
-            elif e.type == SynthesisEventType.FINISHED:
-                self.update_state(sending_audio=False)
-            elif e.type == SynthesisEventType.AUDIO:
-                if self._agent_state == AgentState.LISTENING:
-                    # Stop the audio stream if the agent is listening
+                if e.type == SynthesisEventType.STARTED:
+                    self.update_state(sending_audio=True)
+                elif e.type == SynthesisEventType.FINISHED:
+                    self.update_state(sending_audio=False)
                     break
-            
-                # Convert memoryview to NumPy array
-                audio_data = np.frombuffer(e.audio.data.data, dtype=np.int16)
+                elif e.type == SynthesisEventType.AUDIO:
+                    if self._agent_state == AgentState.LISTENING:
+                        # Stop the audio stream if the agent is listening
+                        break
                 
-                # Adjust the audio level
-                adjusted_audio_data = (audio_data * self.audio_out_gain).astype(np.int16)
-                
-                # Convert the adjusted audio data back to memoryview
-                adjusted_audio_data_memoryview = adjusted_audio_data.tobytes()
-                
-                # Create a new AudioFrame with the adjusted audio data
-                adjusted_audio_frame = rtc.AudioFrame(
-                    data=adjusted_audio_data_memoryview,
-                    sample_rate=e.audio.data.sample_rate,
-                    num_channels=e.audio.data.num_channels,
-                    samples_per_channel=e.audio.data.samples_per_channel,
-                )
+                    # Convert memoryview to NumPy array
+                    audio_data = np.frombuffer(e.audio.data.data, dtype=np.int16)
+                    
+                    # Adjust the audio level
+                    adjusted_audio_data = (audio_data * self.audio_out_gain).astype(np.int16)
+                    
+                    # Convert the adjusted audio data back to memoryview
+                    adjusted_audio_data_memoryview = adjusted_audio_data.tobytes()
+                    
+                    # Create a new AudioFrame with the adjusted audio data
+                    adjusted_audio_frame = rtc.AudioFrame(
+                        data=adjusted_audio_data_memoryview,
+                        sample_rate=e.audio.data.sample_rate,
+                        num_channels=e.audio.data.num_channels,
+                        samples_per_channel=e.audio.data.samples_per_channel,
+                    )
 
-                await self.audio_out.capture_frame(adjusted_audio_frame)
-
-        await tts_stream.aclose()
+                    await self.audio_out.capture_frame(adjusted_audio_frame)
+        except:
+            raise
+        finally:
+            print("SHUTUP")
+            if close_stream:
+                print("Closing stream")
+                await tts_stream.aclose()
 
     # TODO: We should refactor this it is hacky
     def update_state(self, sending_audio: bool = None, processing: bool = None, interrupt: bool = None, ideal: bool = None):
