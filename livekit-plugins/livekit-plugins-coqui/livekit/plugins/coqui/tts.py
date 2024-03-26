@@ -141,8 +141,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             return
 
         self._text += token
-        self._queue.put_nowait(self._text)
-        self._text = ""
 
     async def _run(self) -> None:
         try:
