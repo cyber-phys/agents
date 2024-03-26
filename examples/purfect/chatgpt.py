@@ -105,7 +105,7 @@ class ChatGPTPlugin:
         if self._producing_response:
             self._needs_interrupt = True
             while self._producing_response:
-                asyncio.sleep(0.01)
+                pass
         # Check the last 2 user messages
         for i in range(len(self._messages)-1, -1, -1):
             message = self._messages[i]
@@ -134,7 +134,8 @@ class ChatGPTPlugin:
                 break
         
     async def aclose(self):
-        pass
+        await self._client.aclose()  # Assuming the AsyncOpenAI client has an aclose method to close the session
+
 
     async def send_system_prompt(self) -> AsyncIterable[str]:
         """Send the system prompt to the chat and generate a streamed response
@@ -142,8 +143,14 @@ class ChatGPTPlugin:
         Returns:
             AsyncIterable[str]: Streamed ChatGPT response
         """
-        async for text in self.add_message(None):
-            yield text
+        try:
+            async for text in self.add_message(None):
+                yield text
+        except TimeoutError:
+            yield "Sorry, I'm taking too long to respond. Please try again later."
+            return
+        # finally:
+        #     await self.aclose()
 
     async def add_message(
         self, message: Optional[ChatGPTMessage]
