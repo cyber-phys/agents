@@ -132,10 +132,6 @@ class ChatGPTPlugin:
                 # remove this message and all messages after it
                 self._messages = self._messages[:i]
                 break
-        
-    async def aclose(self):
-        await self._client.aclose()  # Assuming the AsyncOpenAI client has an aclose method to close the session
-
 
     async def send_system_prompt(self) -> AsyncIterable[str]:
         """Send the system prompt to the chat and generate a streamed response
@@ -149,8 +145,6 @@ class ChatGPTPlugin:
         except TimeoutError:
             yield "Sorry, I'm taking too long to respond. Please try again later."
             return
-        # finally:
-        #     await self.aclose()
 
     async def add_message(
         self, message: Optional[ChatGPTMessage]
@@ -166,8 +160,8 @@ class ChatGPTPlugin:
 
         if message is not None:
             self._messages.append(message)
-        # if len(self._messages) > self._message_capacity:
-        #     self._messages.pop(0)
+        if len(self._messages) > self._message_capacity:
+            self._messages.pop(0)
 
         async for text in self._generate_text_streamed(self._model):
             yield text
