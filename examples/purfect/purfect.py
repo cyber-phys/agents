@@ -757,7 +757,7 @@ class PurfectMe:
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         filename='purfect.log',  # Specify the log file name
         filemode='a',  # Append mode, so logs are not overwritten
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Include timestamp
