@@ -62,6 +62,7 @@ async def intro_text_stream(sip: bool):
 
     yield INTRO
 
+#TODO we need to fix agent states
 AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
 COQUI_TTS_SAMPLE_RATE = 24000
@@ -77,6 +78,13 @@ async def intro_text_stream(sip: bool, starting_messages: list[str]):
         yield shortest_message
     else:
         yield random.choice(starting_messages)
+
+def intro_text(sip: bool, starting_messages: list[str]):
+    if sip:
+        shortest_message = min(starting_messages, key=len)
+        return shortest_message
+    else:
+        return random.choice(starting_messages)
 
 class PurfectMe:
     @classmethod
@@ -179,6 +187,7 @@ class PurfectMe:
 
         self.user_tts_lock = asyncio.Lock()
         self.process_chatgpt_result_task_handle = None
+        self.user_tts_thread = None
 
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
@@ -197,9 +206,13 @@ class PurfectMe:
         # anything in the beginning
         await asyncio.sleep(5) #TODO adjust this time
 
+        #TODO we should block listening to user tts until we finish
         sip = self.ctx.room.name.startswith("sip")
         await self.process_chatgpt_result(intro_text_stream(sip, self.starting_messages))
         self.update_state()
+        if self.user_tts_thread:
+            self.user_tts_thread.start()
+        else: print("TTS has not been started")
 
     def on_data_received(self, data_packet: rtc.DataPacket):
         try:
@@ -239,7 +252,6 @@ class PurfectMe:
         if message.deleted:
             return
                 
-        # self.interupt_agent()
         self.create_message_task(message.message)
 
     def on_track_subscribed(
@@ -256,7 +268,7 @@ class PurfectMe:
             self.video_enabled=True
             self.base_prompt = SYSTEM_PROMPT_VIDEO # We are using video so use video prompt
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
-            threading.Thread(target=self.process_user_audio_track, args=(track,)).start()
+            self.user_tts_thread = threading.Thread(target=self.process_user_audio_track, args=(track,))
 
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
@@ -282,23 +294,24 @@ class PurfectMe:
             if not self.run:
                 break
 
-    #TODO We should wait for tts to finish
-    def interupt_agent(self):
-        if self._agent_state == AgentState.SPEAKING:
-            print(f"\n\n{self.agent_transcription}\n\n")
-            self.update_state(interrupt=True)
-            if self.audio_stream_task and not self.audio_stream_task.done():
-                self.audio_stream_task.cancel()
-                self.openrouter_plugin.interrupt(self.agent_transcription)
-            self.agent_transcription = ""
+    # #TODO We should wait for tts to finish
+    # def interupt_agent(self):
+    #     if self._agent_state == AgentState.SPEAKING:
+    #         print(f"\n\n{self.agent_transcription}\n\n")
+    #         self.update_state(interrupt=True)
+    #         if self.audio_stream_task and not self.audio_stream_task.done():
+    #             self.audio_stream_task.cancel()
+    #             self.openrouter_plugin.interrupt(self.agent_transcription)
+    #         self.agent_transcription = ""
 
-        # TODO: WE NEED to Stop chatgpt generation from conintuing
-        elif self._agent_state == AgentState.THINKING:
-            self.update_state(interrupt=True)
-            if self.audio_stream_task and not self.audio_stream_task.done():
-                self.audio_stream_task.cancel()
-                self.openrouter_plugin.interrupt_with_user_message()
+    #     # TODO: WE NEED to Stop chatgpt generation from conintuing
+    #     elif self._agent_state == AgentState.THINKING:
+    #         self.update_state(interrupt=True)
+    #         if self.audio_stream_task and not self.audio_stream_task.done():
+    #             self.audio_stream_task.cancel()
+    #             self.openrouter_plugin.interrupt_with_user_message()
 
+    # TODO better handeling of interuption
     def on_active_speakers_changed(self, speakers: list[rtc.Participant]):
         if speakers:
             active_speaker = speakers[0]
@@ -402,13 +415,12 @@ class PurfectMe:
 
         threading.Thread(target=run_async_audio_stream).start()
 
-
-  #TODO: is there a better way to handel timer?
-  #TODO: better interuption logic
+    #TODO: is there a better way to handel timer?
+    #TODO: better interuption logic
     async def process_user_stt_stream(self, stream):
         print("STARTED process_user_stt_stream")
         buffered_text = ""
-        same_uterance_timeout = 5 # Time in seconds in which to count stt result as the same uterance as previous result
+        same_uterance_timeout = 2 # Time in seconds in which to count stt result as the same uterance as previous result
         uterance_time = 0
         start_of_uterance = True
         is_first_uterance = True
