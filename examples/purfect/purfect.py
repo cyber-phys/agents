@@ -193,7 +193,6 @@ class PurfectMe:
 
         self.tasks.append(self.ctx.create_task(self.process_agent_audio_track(track)))
 
-
         # allow the participant to fully subscribe to the agent's audio track, so it doesn't miss
         # anything in the beginning
         await asyncio.sleep(5) #TODO adjust this time
@@ -221,10 +220,10 @@ class PurfectMe:
                     self.character_prompt = character_card.get("prompt", "")
                     self.starting_messages = character_card.get("startingMessages", [])
                     self.voice = character_card.get("voice", "")
-                    self.base_model = character_card.get("baseModel", "")
-                    self.is_video_transcription_enabled = character_card.get("isVideoTranscriptionEnabled", False)
-                    self.is_video_transcription_continuous = character_card.get("isVideoTranscriptionContinuous", False)
-                    self.video_transcription_model = character_card.get("videoTranscriptionModel", "")
+                    self.base_model = character_card.get("baseModel", "") #TODO check to make sure we are using this
+                    self.is_video_transcription_enabled = character_card.get("isVideoTranscriptionEnabled", False) #TODO: make this control routing to video model
+                    self.is_video_transcription_continuous = character_card.get("isVideoTranscriptionContinuous", False) #TODO: make this control video transcriptions
+                    self.video_transcription_model = character_card.get("videoTranscriptionModel", "") #TODO use this param
                     self.video_transcription_interval = int(character_card.get("videoTranscriptionInterval", 60))                    
                     
                     # Update the OpenRouter plugin with the new prompt
@@ -240,11 +239,8 @@ class PurfectMe:
         if message.deleted:
             return
                 
-        self.interupt_agent()
-
-        msg: ChatGPTMessage = self.process_chatgpt_input(message.message)
-        chatgpt_result = self.openrouter_plugin.add_message(msg)
-        self.ctx.create_task(self.process_chatgpt_result(chatgpt_result))
+        # self.interupt_agent()
+        self.create_message_task(message.message)
 
     def on_track_subscribed(
         self,
@@ -326,6 +322,21 @@ class PurfectMe:
 
         return last_entries.strip()
     
+    def create_message_task(self, message: str, same_uterance: bool = False):
+        # Stop all previous running process_user_chat_message jobs
+        if self.user_chat_message_stop_events:
+            print("stoping thread")
+            for stop_event in self.user_chat_message_stop_events:
+                stop_event.set()
+
+        # Create a new stop event for the current uterance
+        stop_event = threading.Event()
+        self.user_chat_message_stop_events.append(stop_event)
+
+        # Start a new thread for processing the user chat message
+        print(f"Create new task: {message}")
+        threading.Thread(target=self.process_user_chat_message, args=(message, False, stop_event)).start()
+    
     async def update_transcript(self):
         # Consume the generated text responses
         async for text_response in self.bakllava_stream:
@@ -393,6 +404,7 @@ class PurfectMe:
 
 
   #TODO: is there a better way to handel timer?
+  #TODO: better interuption logic
     async def process_user_stt_stream(self, stream):
         print("STARTED process_user_stt_stream")
         buffered_text = ""
@@ -422,19 +434,8 @@ class PurfectMe:
                 print(f"Same uterance: {elapsed_time}")
                 same_uterance = True
 
-            # Stop all previous running process_user_chat_message jobs
-            if self.user_chat_message_stop_events:
-                print("stoping thread")
-                for stop_event in self.user_chat_message_stop_events:
-                    stop_event.set()
+            self.create_message_task(buffered_text, same_uterance)
 
-            # Create a new stop event for the current uterance
-            stop_event = threading.Event()
-            self.user_chat_message_stop_events.append(stop_event)
-
-            # Start a new thread for processing the user chat message
-            print(f"Create new task: {buffered_text}")
-            threading.Thread(target=self.process_user_chat_message, args=(buffered_text, same_uterance, stop_event)).start()
             buffered_text = ""
             start_of_uterance = True
             is_first_uterance = False
