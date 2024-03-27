@@ -209,7 +209,8 @@ class PurfectMe:
 
         #TODO we should block listening to user tts until we finish
         sip = self.ctx.room.name.startswith("sip")
-        await self.process_chatgpt_result(intro_text_stream(sip, self.starting_messages))
+        # await self.process_chatgpt_result(intro_text_stream(sip, self.starting_messages))
+        self.create_message_task(intro_text(sip, self.starting_messages), False, True)
         self.update_state()
         if self.user_tts_thread:
             self.user_tts_thread.start()
@@ -336,7 +337,7 @@ class PurfectMe:
 
         return last_entries.strip()
     
-    def create_message_task(self, message: str, same_uterance: bool = False):
+    def create_message_task(self, message: str, same_uterance: bool = False, speak_only: bool = False):
         # Stop all previous running process_user_chat_message jobs
         if self.user_chat_message_stop_events:
             logging.info("stoping thread")
@@ -349,7 +350,7 @@ class PurfectMe:
 
         # Start a new thread for processing the user chat message
         logging.info(f"Create new task: {message}")
-        threading.Thread(target=self.process_user_chat_message, args=(message, False, stop_event)).start()
+        threading.Thread(target=self.process_user_chat_message, args=(message, same_uterance, stop_event, speak_only)).start()
     
     async def update_transcript(self):
         # Consume the generated text responses
@@ -459,13 +460,27 @@ class PurfectMe:
 
     # TODO we should have a finished event
     # TODO log if we are waiting on lock
-    def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: threading.Event):
+    def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: threading.Event, speak_only: bool = False):
         async def process_chat_message():
             tts = TTS(
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
             )
             try:
-                if same_uterance and self.last_agent_message is not None:
+                if speak_only:
+                    logging.info("Intro")
+                    self.update_state(processing=True)
+                    stream = tts.stream()
+                    self.audio_out_gain = 1.0
+                    msg = ChatGPTMessage(role=ChatGPTMessageRole.assistant, content=uterance)
+                    self.openrouter_plugin._messages.append(msg)
+                    send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
+                    if not stop_event.is_set():
+                        stream.push_text(uterance)
+                        await stream.flush()
+                    if not stop_event.is_set(): 
+                        await send_audio_task
+
+                elif same_uterance and self.last_agent_message is not None:
                     logging.info("Updating Message")
                     self.update_state(processing=True)
                     stream = tts.stream()

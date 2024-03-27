@@ -85,8 +85,27 @@ class ChatGPTPlugin:
         if self._producing_response:
             self._needs_interrupt = True
             print("interupting chatgpt stream")
-                
+        
+        print("\nUpdated agent message:")
+        print(f"Content: {new_text}")
+        
+        # Print the last message or the last two messages if they exist
+        num_messages = len(self._messages)
+        if num_messages >= 1:
+            last_message = self._messages[-1]
+            print("\nLast message:")
+            print(f"Role: {last_message.role}")
+            print(f"Content: {last_message.content}")
+        
+        if num_messages >= 2:
+            second_last_message = self._messages[-2]
+            print("\nSecond last message:")
+            print(f"Role: {second_last_message.role}")
+            print(f"Content: {second_last_message.content}")
+        
+        # Replace the assitant message with the text we actually spoke.
         if self._messages and self._messages[-1].role == ChatGPTMessageRole.assistant:
+            print("Replaceing agent message")
             self._messages[-1].content = new_text
 
     def interrupt_with_user_message(self, append_text: Optional[str] = None):
