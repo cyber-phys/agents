@@ -84,8 +84,7 @@ class ChatGPTPlugin:
         """Interrupt a currently streaming response (if there is one) and replace the last assistant message with the provided text"""
         if self._producing_response:
             self._needs_interrupt = True
-            while self._producing_response:
-                asyncio.sleep(0.01)
+            print("interupting chatgpt stream")
                 
         if self._messages and self._messages[-1].role == ChatGPTMessageRole.assistant:
             self._messages[-1].content = new_text
@@ -101,11 +100,12 @@ class ChatGPTPlugin:
                 self._messages.pop()
     
     def interrupt_and_pop_user_message(self, text: str):
-        """Interrupt a currently streaming response (if there is one) and clear assistant message"""
+        """Interrupt an ongoing response generation and remove the user message containing the specified text, along with all subsequent messages."""
         if self._producing_response:
             self._needs_interrupt = True
-            while self._producing_response:
-                pass
+            self._save_response = False
+            print("interupting chatgpt stream")
+
         # Check the last 2 user messages
         for i in range(len(self._messages)-1, -1, -1):
             message = self._messages[i]

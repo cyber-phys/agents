@@ -212,12 +212,12 @@ class PurfectMe:
         self.update_state()
         if self.user_tts_thread:
             self.user_tts_thread.start()
-        else: print("TTS has not been started")
+        else: logging.info("TTS has not been started")
 
     def on_data_received(self, data_packet: rtc.DataPacket):
         try:
             data = json.loads(data_packet.data.decode())
-            print(f"DATA: {data}")
+            logging.info(f"DATA: {data}")
             
             topic = data.get("topic")
             if topic == "character_prompt":
@@ -260,7 +260,7 @@ class PurfectMe:
         publication: rtc.TrackPublication,
         participant: rtc.RemoteParticipant,
     ):
-        print(f"NEW TRACK {track.kind}")
+        logging.info(f"NEW TRACK {track.kind}")
         if track.kind == rtc.TrackKind.KIND_VIDEO:
             self.tasks.append(self.ctx.create_task(self.process_video_track(track)))
             self.tasks.append(self.ctx.create_task(self.update_transcript()))
@@ -297,7 +297,7 @@ class PurfectMe:
     # #TODO We should wait for tts to finish
     # def interupt_agent(self):
     #     if self._agent_state == AgentState.SPEAKING:
-    #         print(f"\n\n{self.agent_transcription}\n\n")
+    #         logging.info(f"\n\n{self.agent_transcription}\n\n")
     #         self.update_state(interrupt=True)
     #         if self.audio_stream_task and not self.audio_stream_task.done():
     #             self.audio_stream_task.cancel()
@@ -338,7 +338,7 @@ class PurfectMe:
     def create_message_task(self, message: str, same_uterance: bool = False):
         # Stop all previous running process_user_chat_message jobs
         if self.user_chat_message_stop_events:
-            print("stoping thread")
+            logging.info("stoping thread")
             for stop_event in self.user_chat_message_stop_events:
                 stop_event.set()
 
@@ -347,7 +347,7 @@ class PurfectMe:
         self.user_chat_message_stop_events.append(stop_event)
 
         # Start a new thread for processing the user chat message
-        print(f"Create new task: {message}")
+        logging.info(f"Create new task: {message}")
         threading.Thread(target=self.process_user_chat_message, args=(message, False, stop_event)).start()
     
     async def update_transcript(self):
@@ -360,9 +360,9 @@ class PurfectMe:
                 self.video_transcript["scene"].append(text_response)
                 self.video_transcript["time"].append(current_time)
 
-                # print(f"Generated text: {text_response}")
+                # logging.info(f"Generated text: {text_response}")
             except json.JSONDecodeError as e:
-                print(f"Error processing frame: {str(e)}")
+                logging.info(f"Error processing frame: {str(e)}")
                 # Handle the error, e.g., skip the frame or take appropriate action
                 continue
     
@@ -378,7 +378,7 @@ class PurfectMe:
                 async for text in vision_stream:
                     # stream.push_text(text)
                     all_text += text
-                # print(all_text)
+                # logging.info(all_text)
                 # Append the scene description and timestamp to the respective lists
                 self.video_transcript["scene"].append(all_text)
                 self.video_transcript["time"].append(current_time)
@@ -401,14 +401,14 @@ class PurfectMe:
         async def process_audio_stream():
             audio_stream = rtc.AudioStream(track)
             stream = self.stt_plugin.stream()
-            print("STARTED process_user_audio_track")
+            logging.info("STARTED process_user_audio_track")
             self.ctx.create_task(self.process_user_stt_stream(stream))
 
             async for audio_frame_event in audio_stream:
                 stream.push_frame(audio_frame_event.frame)
 
             await stream.flush()
-            print("STOPPED process_user_audio_track")
+            logging.info("STOPPED process_user_audio_track")
 
         def run_async_audio_stream():
             asyncio.run(process_audio_stream())
@@ -418,7 +418,7 @@ class PurfectMe:
     #TODO: is there a better way to handel timer?
     #TODO: better interuption logic
     async def process_user_stt_stream(self, stream):
-        print("STARTED process_user_stt_stream")
+        logging.info("STARTED process_user_stt_stream")
         buffered_text = ""
         same_uterance_timeout = 2 # Time in seconds in which to count stt result as the same uterance as previous result
         uterance_time = 0
@@ -440,18 +440,21 @@ class PurfectMe:
             if buffered_text == "":
                 continue
             
+            # TODO this same uterance logic is broken
             same_uterance = False
             elapsed_time = time.time() - uterance_time
             if elapsed_time > same_uterance_timeout and uterance_time != 0 and not is_first_uterance:
-                print(f"Same uterance: {elapsed_time}")
+                logging.info(f"Same uterance: {elapsed_time}")
                 same_uterance = True
+            else: logging.info(f"Diff uterance: {elapsed_time}")
+
 
             self.create_message_task(buffered_text, same_uterance)
 
             buffered_text = ""
             start_of_uterance = True
             is_first_uterance = False
-        print("STOPED process_user_stt_stream")
+        logging.info("STOPED process_user_stt_stream")
 
     # TODO we should have a finished event
     # TODO log if we are waiting on lock
@@ -463,7 +466,7 @@ class PurfectMe:
             with self.process_user_chat_lock:
                 try:
                     if same_uterance and self.last_agent_message is not None:
-                        print("Updating Message")
+                        logging.info("Updating Message")
                         self.update_state(processing=True)
                         stream = tts.stream()
                         self.audio_out_gain = 1.0
@@ -493,7 +496,7 @@ class PurfectMe:
                             await send_audio_task
 
                     else:
-                        print("New message")
+                        logging.info("New message")
                         self.update_state(processing=True)
                         stream = tts.stream()
                         self.audio_out_gain = 1.0
@@ -506,7 +509,7 @@ class PurfectMe:
                             topic="lk-chat-topic",
                         )
 
-                        self.openrouter_plugin.interrupt_and_pop_user_message(uterance)
+                        self.openrouter_plugin.interrupt(self.last_agent_message.message)
                         msg = self.process_chatgpt_input(uterance)
                         self.last_user_message = chat_message
                         chatgpt_stream = self.openrouter_plugin.add_message(msg)
@@ -521,13 +524,13 @@ class PurfectMe:
                             await send_audio_task
 
                 except StopProcessingException:
-                    logging.info("Chat message processing was stopped due to stop event.")
+                    logging.info("process_user_chat_message stop event")
                 except Exception as e:
                     logging.error(f"An unexpected error occurred in process_user_chat_message: {e}", exc_info=True)
                 finally:
                     await stream.aclose()
                     self.update_state(processing=False)
-                    print("EXITED process chat message")
+                    logging.info("EXITED TASK: process chat message")
 
         def run_async_chat_message():
             asyncio.run(process_chat_message())
@@ -595,10 +598,10 @@ class PurfectMe:
                 all_text += text
             return all_text
         except Exception as e:
-            print(f"Error: {str(e)}")
+            logging.info(f"Error: {str(e)}")
 
     async def process_chatgpt_result(self, text_stream, stop_event: threading.Event = None):
-        print("Process ChatGPT Result")
+        logging.info("Process ChatGPT Result")
         self.audio_out_gain = 1.0
         # ChatGPT is streamed, so we'll flip the state immediately
         self.update_state(processing=True)
@@ -610,16 +613,16 @@ class PurfectMe:
             all_text = ""
             async for text in text_stream:
                 if stop_event is not None and stop_event.is_set():
-                    print("STOP EVENT text stream")
+                    logging.info("STOP EVENT text stream")
                     break
                 all_text += text
             
             if stop_event is not None and stop_event.is_set():
-                print("STOP EVENT text stream return")
+                logging.info("STOP EVENT text stream return")
                 self.update_state(processing=False)
                 return
             
-            print(all_text)
+            logging.info(all_text)
             
             self.agent_transcription = ""
             stream.push_text(all_text)
@@ -634,20 +637,19 @@ class PurfectMe:
             self.update_state(processing=False)
 
     async def process_chatgpt_result_return(self, text_stream, stop_event: threading.Event = None):
-        print("Process ChatGPT Result")
         try:
             all_text = ""
             async for text in text_stream:
                 if stop_event is not None and stop_event.is_set():
-                    print("STOP EVENT process text stream")
+                    logging.info("STOP EVENT process text stream")
                     raise StopProcessingException("Stop event set, halting text stream processing.")
                 all_text += text
             
             if stop_event is not None and stop_event.is_set():
-                print("STOP EVENT process text stream")
+                logging.info("STOP EVENT process text stream")
                 raise StopProcessingException("Stop event set, halting text stream processing.")
             
-            print(all_text)
+            logging.info(all_text)
             return(all_text)
 
         except Exception as e:
@@ -655,11 +657,9 @@ class PurfectMe:
             raise e
 
     async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent], stop_event: threading.Event = None, close_stream: bool = True):
-        print("Yaping")
         try:
             async for e in tts_stream:
                 if stop_event is not None and stop_event.is_set():
-                    print("STOP EVENT send audio")
                     raise StopProcessingException("Stop event set, halting text stream processing.")
 
                 if e.type == SynthesisEventType.STARTED:
@@ -693,9 +693,7 @@ class PurfectMe:
         except:
             raise
         finally:
-            print("SHUTUP")
             if close_stream:
-                print("Closing stream")
                 await tts_stream.aclose()
 
     # TODO: We should refactor this it is hacky
@@ -756,8 +754,12 @@ class PurfectMe:
         asyncio.create_task(self.disconnect_agent())
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
+    logging.basicConfig(
+        level=logging.DEBUG,
+        filename='purfect.log',  # Specify the log file name
+        filemode='a',  # Append mode, so logs are not overwritten
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Include timestamp
+    )
     async def job_request_cb(job_request: agents.JobRequest):
         logging.info("Accepting job for Purfect Me")
 
