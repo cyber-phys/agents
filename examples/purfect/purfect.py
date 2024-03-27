@@ -188,6 +188,7 @@ class PurfectMe:
         self.user_tts_lock = asyncio.Lock()
         self.process_chatgpt_result_task_handle = None
         self.user_tts_thread = None
+        self.shared_event_loop = asyncio.new_event_loop()
 
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
@@ -533,7 +534,8 @@ class PurfectMe:
                     logging.info("EXITED TASK: process chat message")
 
         def run_async_chat_message():
-            asyncio.run(process_chat_message())
+            asyncio.set_event_loop(self.shared_event_loop)
+            self.shared_event_loop.run_until_complete(process_chat_message())
 
         threading.Thread(target=run_async_chat_message).start()
 
