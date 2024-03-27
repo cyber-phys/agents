@@ -40,6 +40,7 @@ import numpy as np
 from livekit.rtc._proto.room_pb2 import DataPacketKind
 import threading
 from queue import Queue
+import random
 
 load_dotenv('.env')
 
@@ -49,9 +50,9 @@ SYSTEM_PROMPT_VIDEO = read_prompt_file("prompts/system_prompt_video.md")
 
 VIVI_PROMPT = read_prompt_file("prompts/vivi.md")
 
-SIP_INTRO = "Operator speaking, where can I direct your call?"
+SIP_INTRO = "Hello this is vivi!"
 
-INTRO = "Operator speaking, where can I direct your call?"
+INTRO = "Hey I am vivi your video assistant!"
 
 # convert intro response to a stream
 async def intro_text_stream(sip: bool):
@@ -69,6 +70,13 @@ COQUI_TTS_CHANNELS = 1
 class StopProcessingException(Exception):
     """Raised when the processing should be stopped immediately."""
     pass
+
+async def intro_text_stream(sip: bool, starting_messages: list[str]):
+    if sip:
+        shortest_message = min(starting_messages, key=len)
+        yield shortest_message
+    else:
+        yield random.choice(starting_messages)
 
 class PurfectMe:
     @classmethod
@@ -153,7 +161,7 @@ class PurfectMe:
 
         self.name = "vivi"
         self.character_prompt = VIVI_PROMPT
-        self.starting_messages = [INTRO]
+        self.starting_messages = [SIP_INTRO, INTRO]
         self.voice = "voices/goldvoice.wav"
         self.base_model = "mistralai/mixtral-8x7b-instruct:nitro"
         self.is_video_transcription_enabled = False
@@ -188,10 +196,10 @@ class PurfectMe:
 
         # allow the participant to fully subscribe to the agent's audio track, so it doesn't miss
         # anything in the beginning
-        await asyncio.sleep(5)
+        await asyncio.sleep(5) #TODO adjust this time
 
         sip = self.ctx.room.name.startswith("sip")
-        await self.process_chatgpt_result(intro_text_stream(sip))
+        await self.process_chatgpt_result(intro_text_stream(sip, self.starting_messages))
         self.update_state()
 
     def on_data_received(self, data_packet: rtc.DataPacket):
