@@ -464,78 +464,80 @@ class PurfectMe:
             tts = TTS(
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
             )
-            with self.process_user_chat_lock:
-                try:
-                    if same_uterance and self.last_agent_message is not None:
-                        logging.info("Updating Message")
-                        self.update_state(processing=True)
-                        stream = tts.stream()
-                        self.audio_out_gain = 1.0
+            try:
+                if same_uterance and self.last_agent_message is not None:
+                    logging.info("Updating Message")
+                    self.update_state(processing=True)
+                    stream = tts.stream()
+                    self.audio_out_gain = 1.0
 
-                        last_message_content = self.last_user_message.message
-                        self.openrouter_plugin.interrupt_and_pop_user_message(last_message_content)
-                        # Update the message content with the new buffered_text
-                        updated_message_content = last_message_content + uterance
-                        # Update the "message" field of self.last_user_message
-                        self.last_user_message.message = updated_message_content
-                        # Send the updated message using self.chat.update_message
+                    last_message_content = self.last_user_message.message
+                    self.openrouter_plugin.interrupt_and_pop_user_message(last_message_content)
+                    # Update the message content with the new buffered_text
+                    updated_message_content = last_message_content + uterance
+                    # Update the "message" field of self.last_user_message
+                    self.last_user_message.message = updated_message_content
+                    # Send the updated message using self.chat.update_message
 
-                        await self.chat.update_message(self.last_user_message)
-                        msg = self.process_chatgpt_input(self.last_user_message.message)
+                    await self.chat.update_message(self.last_user_message)
+                    msg = self.process_chatgpt_input(self.last_user_message.message)
 
-                        if not stop_event.is_set():
-                            chatgpt_stream = self.openrouter_plugin.add_message(msg)
-
-                        self.update_state(processing=True)
-                        send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
-                        if not stop_event.is_set(): 
-                            result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
-                        if not stop_event.is_set():
-                            stream.push_text(result)
-                            await stream.flush()
-                        if not stop_event.is_set(): 
-                            await send_audio_task
-
-                    else:
-                        logging.info("New message")
-                        self.update_state(processing=True)
-                        stream = tts.stream()
-                        self.audio_out_gain = 1.0
-
-                        chat_message = rtc.ChatMessage(message=uterance)
-                        # TODO: Write user chat update method
-                        await self.ctx.room.local_participant.publish_data(
-                            payload=json.dumps(chat_message.asjsondict()),
-                            kind=DataPacketKind.KIND_RELIABLE,
-                            topic="lk-chat-topic",
-                        )
-
-                        self.openrouter_plugin.interrupt(self.last_agent_message.message)
-                        msg = self.process_chatgpt_input(uterance)
-                        self.last_user_message = chat_message
+                    if not stop_event.is_set():
                         chatgpt_stream = self.openrouter_plugin.add_message(msg)
-                        
-                        send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
-                        if not stop_event.is_set():
-                            result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
-                        if not stop_event.is_set():
-                            stream.push_text(result)                    
-                            await stream.flush()
-                        if not stop_event.is_set():
-                            await send_audio_task
 
-                except StopProcessingException:
-                    logging.info("process_user_chat_message stop event")
-                except Exception as e:
-                    logging.error(f"An unexpected error occurred in process_user_chat_message: {e}", exc_info=True)
-                finally:
-                    await stream.aclose()
-                    self.update_state(processing=False)
-                    logging.info("EXITED TASK: process chat message")
+                    self.update_state(processing=True)
+                    send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
+                    if not stop_event.is_set(): 
+                        result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
+                    if not stop_event.is_set():
+                        stream.push_text(result)
+                        await stream.flush()
+                    if not stop_event.is_set(): 
+                        await send_audio_task
+
+                else:
+                    logging.info("New message")
+                    self.update_state(processing=True)
+                    stream = tts.stream()
+                    self.audio_out_gain = 1.0
+
+                    chat_message = rtc.ChatMessage(message=uterance)
+                    # TODO: Write user chat update method
+                    await self.ctx.room.local_participant.publish_data(
+                        payload=json.dumps(chat_message.asjsondict()),
+                        kind=DataPacketKind.KIND_RELIABLE,
+                        topic="lk-chat-topic",
+                    )
+
+                    #TODO Fix interupt:
+                    self.openrouter_plugin.interrupt(self.last_agent_message.message)
+                    # self.openrouter_plugin.interrupt()
+                    msg = self.process_chatgpt_input(uterance)
+                    self.last_user_message = chat_message
+                    chatgpt_stream = self.openrouter_plugin.add_message(msg)
+                    
+                    send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
+                    if not stop_event.is_set():
+                        result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
+                    if not stop_event.is_set():
+                        stream.push_text(result)                    
+                        await stream.flush()
+                    if not stop_event.is_set():
+                        await send_audio_task
+
+            except StopProcessingException:
+                logging.info("process_user_chat_message stop event")
+            except Exception as e:
+                logging.error(f"An unexpected error occurred in process_user_chat_message: {e}", exc_info=True)
+            finally:
+                await stream.aclose()
+                self.update_state(processing=False)
+                logging.info("EXITED TASK: process chat message")
 
         def run_async_chat_message():
-            asyncio.set_event_loop(self.shared_event_loop)
-            self.shared_event_loop.run_until_complete(process_chat_message())
+            with self.process_user_chat_lock:
+                asyncio.set_event_loop(self.shared_event_loop)
+                self.shared_event_loop.run_until_complete(process_chat_message())
 
         threading.Thread(target=run_async_chat_message).start()
 
@@ -660,6 +662,7 @@ class PurfectMe:
 
     async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent], stop_event: threading.Event = None, close_stream: bool = True):
         try:
+            self.start_of_message = True
             async for e in tts_stream:
                 if stop_event is not None and stop_event.is_set():
                     raise StopProcessingException("Stop event set, halting text stream processing.")
