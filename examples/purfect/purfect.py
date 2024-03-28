@@ -127,13 +127,13 @@ class PurfectMe:
 
         self.agent_stt_plugin = STT(
             min_silence_duration=200,
-            model='enhanced'
+            # model='enhanced'
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
 
         self.user_stt_plugin = STT(
             min_silence_duration=200,
-            model='enhanced'
+            # model='enhanced'
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
 
@@ -534,8 +534,10 @@ class PurfectMe:
                     )
 
                     #TODO Fix interupt:
-                    self.openrouter_plugin.interrupt(self.last_agent_message.message)
-                    # self.openrouter_plugin.interrupt()
+                    if self.last_agent_message:
+                        self.openrouter_plugin.interrupt(self.last_agent_message.message)
+                    # else:
+                        # self.openrouter_plugin.interrupt()
                     msg = self.process_chatgpt_input(uterance)
                     self.last_user_message = chat_message
                     chatgpt_stream = self.openrouter_plugin.add_message(msg)
