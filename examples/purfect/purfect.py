@@ -125,14 +125,22 @@ class PurfectMe:
             base_url="https://openrouter.ai/api/v1"
         )
 
-        self.stt_plugin = STT(
+        self.agent_stt_plugin = STT(
             min_silence_duration=200,
+            model='enhanced'
+            # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
+        )
+
+        self.user_stt_plugin = STT(
+            min_silence_duration=200,
+            model='enhanced'
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
 
         self.tts_plugin = TTS(
             # api_url="http://10.0.0.119:6666", sample_rate=COQUI_TTS_SAMPLE_RATE
         )
+        
 
         self.ctx: agents.JobContext = ctx
         self.chat = rtc.ChatManager(ctx.room)
@@ -390,7 +398,7 @@ class PurfectMe:
 
     async def process_agent_audio_track(self, track: rtc.Track):
         audio_stream = rtc.AudioStream(track)
-        stream = self.stt_plugin.stream()
+        stream = self.agent_stt_plugin.stream()
         self.ctx.create_task(self.process_agent_stt_stream(stream))
 
         async for audio_frame_event in audio_stream:
@@ -402,7 +410,7 @@ class PurfectMe:
     def process_user_audio_track(self, track):
         async def process_audio_stream():
             audio_stream = rtc.AudioStream(track)
-            stream = self.stt_plugin.stream()
+            stream = self.user_stt_plugin.stream()
             logging.info("STARTED process_user_audio_track")
             self.ctx.create_task(self.process_user_stt_stream(stream))
 
@@ -521,7 +529,8 @@ class PurfectMe:
                     await self.ctx.room.local_participant.publish_data(
                         payload=json.dumps(chat_message.asjsondict()),
                         kind=DataPacketKind.KIND_RELIABLE,
-                        topic="lk-chat-topic",
+                        # topic="lk-chat-topic",
+                        topic="transcription"
                     )
 
                     #TODO Fix interupt:
