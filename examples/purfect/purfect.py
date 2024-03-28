@@ -41,6 +41,7 @@ from livekit.rtc._proto.room_pb2 import DataPacketKind
 import threading
 from queue import Queue
 import random
+from chat import ChatMessage, ChatManager
 
 load_dotenv('.env')
 
@@ -143,7 +144,7 @@ class PurfectMe:
         
 
         self.ctx: agents.JobContext = ctx
-        self.chat = rtc.ChatManager(ctx.room)
+        self.chat = ChatManager(ctx.room)
         self.audio_out = rtc.AudioSource(COQUI_TTS_SAMPLE_RATE, COQUI_TTS_CHANNELS)
         self.audio_out_gain = 1.0
 
@@ -257,7 +258,7 @@ class PurfectMe:
         except json.JSONDecodeError:
             logging.warning("Failed to parse data packet")
 
-    def on_chat_received(self, message: rtc.ChatMessage):
+    def on_chat_received(self, message: ChatMessage):
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
@@ -524,13 +525,12 @@ class PurfectMe:
                     stream = tts.stream()
                     self.audio_out_gain = 1.0
 
-                    chat_message = rtc.ChatMessage(message=uterance)
+                    chat_message = ChatMessage(message=uterance)
                     # TODO: Write user chat update method
                     await self.ctx.room.local_participant.publish_data(
                         payload=json.dumps(chat_message.asjsondict()),
                         kind=DataPacketKind.KIND_RELIABLE,
-                        # topic="lk-chat-topic",
-                        topic="transcription"
+                        topic="lk-chat-topic",
                     )
 
                     #TODO Fix interupt:
