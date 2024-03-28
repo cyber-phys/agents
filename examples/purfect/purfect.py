@@ -489,7 +489,8 @@ class PurfectMe:
                     if not stop_event.is_set(): 
                         await send_audio_task
 
-                elif same_uterance and self.last_agent_message is not None:
+                # elif same_uterance and self.last_agent_message is not None:
+                elif False:
                     logging.info("Updating Message")
                     self.update_state(processing=True)
                     stream = tts.stream()
