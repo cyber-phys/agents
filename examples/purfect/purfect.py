@@ -127,14 +127,14 @@ class PurfectMe:
         )
 
         self.agent_stt_plugin = STT(
-            min_silence_duration=200,
-            # model='enhanced'
+            min_silence_duration=10,
+            model='enhanced-phonecall'
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
 
         self.user_stt_plugin = STT(
             min_silence_duration=200,
-            # model='enhanced'
+            model='enhanced-phonecall'
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
 
@@ -403,8 +403,8 @@ class PurfectMe:
         self.ctx.create_task(self.process_agent_stt_stream(stream))
 
         async for audio_frame_event in audio_stream:
-            if self._agent_state != AgentState.SPEAKING:
-                continue
+            # if self._agent_state != AgentState.SPEAKING:
+            #     continue
             stream.push_frame(audio_frame_event.frame)
         await stream.flush()
     
@@ -571,44 +571,36 @@ class PurfectMe:
     # TODO: create local log of all voice transcriptions 
     async def process_agent_stt_stream(self, stream):
         buffered_text = ""
+        last_event_final = True
         async for event in stream:
-            if event.alternatives[0].text == "":
+            temp_text = event.alternatives[0].text
+
+            if temp_text == "":
                 continue
+
+            if self.start_of_message and last_event_final:
+                buffered_text = ""
+                self.start_of_message = False
+                self.last_agent_message = await self.chat.send_message(temp_text)
 
             if event.is_final:
-                buffered_text = " ".join([buffered_text, event.alternatives[0].text])
-                self.agent_transcription = " ".join([self.agent_transcription, event.alternatives[0].text])
-
-            if not event.end_of_speech:
-                continue
-            
-            if self.start_of_message:
-                self.start_of_message = False
-                self.last_agent_message = await self.chat.send_message(buffered_text)
-            else:
-                # Extract the "message" from self.last_agent_message
-                last_message_content = self.last_agent_message.message
-
-                # Update the message content with the new buffered_text
-                updated_message_content = last_message_content + buffered_text
-
-                # Update the "message" field of self.last_agent_message
-                self.last_agent_message.message = updated_message_content
-
-                # Send the updated message using self.chat.update_message
+                buffered_text = " ".join([buffered_text, temp_text])
+                self.agent_transcription = " ".join([self.agent_transcription, temp_text])
+                self.last_agent_message.message = buffered_text
                 await self.chat.update_message(self.last_agent_message)
-            # await self.ctx.room.local_participant.publish_data(
-            #     json.dumps(
-            #         {
-            #             "text": buffered_text,
-            #             "timestamp": int(datetime.now().timestamp() * 1000),
-            #             "speaker": "agent",
-            #         }
-            #     ),
-            #     topic="transcription",
-            # )
-            buffered_text = ""
-            
+                last_event_final = True
+                continue
+
+            # Update the message content with the new buffered_text
+            updated_message_content = buffered_text + temp_text
+
+            # Update the "message" field of self.last_agent_message
+            self.last_agent_message.message = updated_message_content
+
+            # Send the updated message using self.chat.update_message
+            await self.chat.update_message(self.last_agent_message)
+            last_event_final = False
+          
     def process_chatgpt_input(self, message):
         if self.video_enabled:
             last_entries = self.get_last_entries(5)
@@ -751,7 +743,6 @@ class PurfectMe:
             self._agent_interupted = False
         elif self._processing:
             state = AgentState.THINKING
-            self.start_of_message = True
             self._agent_interupted = False
 
         self._agent_state = state
@@ -787,7 +778,7 @@ class PurfectMe:
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         filename='purfect.log',  # Specify the log file name
         filemode='a',  # Append mode, so logs are not overwritten
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Include timestamp
