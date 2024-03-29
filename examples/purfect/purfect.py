@@ -128,13 +128,13 @@ class PurfectMe:
 
         self.agent_stt_plugin = STT(
             min_silence_duration=10,
-            model='enhanced-phonecall'
+            model='enhanced'
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
 
         self.user_stt_plugin = STT(
             min_silence_duration=200,
-            model='enhanced-phonecall'
+            model='enhanced'
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
 
@@ -263,7 +263,7 @@ class PurfectMe:
         if message.deleted:
             return
                 
-        self.create_message_task(message.message)
+        self.create_message_task(message.message, add_message=False)
 
     def on_track_subscribed(
         self,
@@ -346,7 +346,7 @@ class PurfectMe:
 
         return last_entries.strip()
     
-    def create_message_task(self, message: str, same_uterance: bool = False, speak_only: bool = False):
+    def create_message_task(self, message: str, same_uterance: bool = False, speak_only: bool = False, add_message: bool = True):
         # Stop all previous running process_user_chat_message jobs
         if self.user_chat_message_stop_events:
             logging.info("stoping thread")
@@ -359,7 +359,7 @@ class PurfectMe:
 
         # Start a new thread for processing the user chat message
         logging.info(f"Create new task: {message}")
-        threading.Thread(target=self.process_user_chat_message, args=(message, same_uterance, stop_event, speak_only)).start()
+        threading.Thread(target=self.process_user_chat_message, args=(message, same_uterance, stop_event, speak_only, add_message)).start()
     
     async def update_transcript(self):
         # Consume the generated text responses
@@ -469,7 +469,7 @@ class PurfectMe:
 
     # TODO we should have a finished event
     # TODO log if we are waiting on lock
-    def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: threading.Event, speak_only: bool = False):
+    def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: threading.Event, speak_only: bool = False, add_message: bool = True):
         async def process_chat_message():
             tts = TTS(
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
@@ -528,11 +528,12 @@ class PurfectMe:
 
                     chat_message = ChatMessage(message=uterance)
                     # TODO: Write user chat update method
-                    await self.ctx.room.local_participant.publish_data(
-                        payload=json.dumps(chat_message.asjsondict()),
-                        kind=DataPacketKind.KIND_RELIABLE,
-                        topic="lk-chat-topic",
-                    )
+                    if add_message:
+                        await self.ctx.room.local_participant.publish_data(
+                            payload=json.dumps(chat_message.asjsondict()),
+                            kind=DataPacketKind.KIND_RELIABLE,
+                            topic="lk-chat-topic",
+                        )
 
                     #TODO Fix interupt:
                     if self.last_agent_message:
