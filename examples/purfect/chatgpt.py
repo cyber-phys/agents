@@ -85,24 +85,7 @@ class ChatGPTPlugin:
         if self._producing_response:
             self._needs_interrupt = True
             print("interupting chatgpt stream")
-        
-        print("\nUpdated agent message:")
-        print(f"Content: {new_text}")
-        
-        # Print the last message or the last two messages if they exist
-        num_messages = len(self._messages)
-        if num_messages >= 1:
-            last_message = self._messages[-1]
-            print("\nLast message:")
-            print(f"Role: {last_message.role}")
-            print(f"Content: {last_message.content}")
-        
-        if num_messages >= 2:
-            second_last_message = self._messages[-2]
-            print("\nSecond last message:")
-            print(f"Role: {second_last_message.role}")
-            print(f"Content: {second_last_message.content}")
-        
+
         # Replace the assitant message with the text we actually spoke.
         if self._messages and self._messages[-1].role == ChatGPTMessageRole.assistant:
             print("Replaceing agent message")
@@ -166,7 +149,7 @@ class ChatGPTPlugin:
             return
 
     async def add_message(
-        self, message: Optional[ChatGPTMessage]
+        self, message: Optional[ChatGPTMessage], save_response: bool = True
     ) -> AsyncIterable[str]:
         """Add a message to the chat and generate a streamed response
 
@@ -182,18 +165,45 @@ class ChatGPTPlugin:
         if len(self._messages) > self._message_capacity:
             self._messages.pop(0)
 
-        async for text in self._generate_text_streamed(self._model):
+        async for text in self._generate_text_streamed(self._model, save_response=save_response):
             yield text
 
-    async def _generate_text_streamed(self, model: str) -> AsyncIterable[str]:
-        prompt_message = ChatGPTMessage(
-            role=ChatGPTMessageRole.system, content=self._prompt
-        )
+    async def query(
+            self, message: ChatGPTMessage, system_prompt: Optional[str]
+        ) -> AsyncIterable[str]:
+            """Add a message to the chat and generate a streamed response
+
+            Args:
+                message (ChatGPTMessage): The message to add
+
+            Returns:
+                AsyncIterable[str]: Streamed ChatGPT response
+            """
+
+            if len(self._messages) + 1 > self._message_capacity:
+                self._messages.pop(0)
+
+            async for text in self._generate_text_streamed(self._model, message=message, system_message=system_prompt, save_response=False):
+                yield text
+
+    async def _generate_text_streamed(self, model: str, message: ChatGPTMessage = None, system_message: str = None, save_response: bool = True) -> AsyncIterable[str]:
+        if system_message is not None:
+            prompt_message = ChatGPTMessage(
+                role=ChatGPTMessageRole.system, content=system_message
+            )
+        else:
+            prompt_message = ChatGPTMessage(
+                role=ChatGPTMessageRole.system, content=self._prompt
+            )
         try:
             chat_messages = [
                 m.to_api(process_image=(i == len(self._messages) - 1))
                 for i, m in enumerate(self._messages)
             ]
+
+            if message is not None:
+                chat_messages.append(message.to_api())
+            
             chat_stream = await asyncio.wait_for(
                 self._client.chat.completions.create(
                     model=model,
@@ -240,7 +250,7 @@ class ChatGPTPlugin:
                 complete_response += content
                 yield content
 
-        if self._save_response:
+        if self._save_response and save_response:
             self._messages.append(
                 ChatGPTMessage(role=ChatGPTMessageRole.assistant, content=complete_response)
             )

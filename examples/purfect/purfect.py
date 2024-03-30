@@ -133,7 +133,7 @@ class PurfectMe:
         )
 
         self.user_stt_plugin = STT(
-            min_silence_duration=200,
+            min_silence_duration=500,
             model='enhanced'
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
@@ -199,6 +199,9 @@ class PurfectMe:
         self.user_tts_thread = None
         self.shared_event_loop = asyncio.new_event_loop()
 
+        self.last_user_interaction = time.time()
+
+
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
         self.ctx.room.on("participant_disconnected", self.on_disconnected_participant)
@@ -216,14 +219,14 @@ class PurfectMe:
         # anything in the beginning
         await asyncio.sleep(5) #TODO adjust this time
 
-        #TODO we should block listening to user tts until we finish
         sip = self.ctx.room.name.startswith("sip")
-        # await self.process_chatgpt_result(intro_text_stream(sip, self.starting_messages))
         self.create_message_task(intro_text(sip, self.starting_messages), False, True)
         self.update_state()
         if self.user_tts_thread:
             self.user_tts_thread.start()
         else: logging.info("TTS has not been started")
+        self.tasks.append(self.ctx.create_task(self.check_user_inactivity()))
+
 
     def on_data_received(self, data_packet: rtc.DataPacket):
         try:
@@ -262,7 +265,7 @@ class PurfectMe:
         # TODO: handle deleted and updated messages in message context
         if message.deleted:
             return
-                
+        
         self.create_message_task(message.message, add_message=False)
 
     def on_track_subscribed(
@@ -331,6 +334,20 @@ class PurfectMe:
         else:
             logging.info("No active speaker")
 
+    async def check_user_inactivity(self):
+        inactive_duration = 60 
+        while True:
+            await asyncio.sleep(inactive_duration)
+            current_time = time.time()
+            if current_time - self.last_user_interaction > inactive_duration:
+                # User has been inactive for the specified duration
+                # Generate a response or perform any desired action
+                response = "Hey there! It's been a while since we last chatted. Is there anything I can help you with?"
+                self.create_message_task(response, empty_message=True)
+            else:
+                # User has been active, reset the timer
+                self.last_user_interaction = current_time
+
     def get_last_entries(self, num_entries):
         last_entries = ""
         total_entries = len(self.video_transcript["scene"])
@@ -346,7 +363,7 @@ class PurfectMe:
 
         return last_entries.strip()
     
-    def create_message_task(self, message: str, same_uterance: bool = False, speak_only: bool = False, add_message: bool = True):
+    def create_message_task(self, message: str, same_uterance: bool = False, speak_only: bool = False, add_message: bool = True, empty_message: bool = False):
         # Stop all previous running process_user_chat_message jobs
         if self.user_chat_message_stop_events:
             logging.info("stoping thread")
@@ -359,7 +376,7 @@ class PurfectMe:
 
         # Start a new thread for processing the user chat message
         logging.info(f"Create new task: {message}")
-        threading.Thread(target=self.process_user_chat_message, args=(message, same_uterance, stop_event, speak_only, add_message)).start()
+        threading.Thread(target=self.process_user_chat_message, args=(message, same_uterance, stop_event, speak_only, add_message, empty_message)).start()
     
     async def update_transcript(self):
         # Consume the generated text responses
@@ -469,7 +486,7 @@ class PurfectMe:
 
     # TODO we should have a finished event
     # TODO log if we are waiting on lock
-    def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: threading.Event, speak_only: bool = False, add_message: bool = True):
+    def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: threading.Event, speak_only: bool = False, add_message: bool = True, empty_message: bool = False):
         async def process_chat_message():
             tts = TTS(
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
@@ -489,8 +506,26 @@ class PurfectMe:
                     if not stop_event.is_set(): 
                         await send_audio_task
 
+                elif empty_message:
+                    logging.info("New message")
+                    self.update_state(processing=True)
+                    stream = tts.stream()
+                    self.audio_out_gain = 1.0
+
+                    chatgpt_stream = self.openrouter_plugin.add_message(message=None)
+                    
+                    send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
+                    if not stop_event.is_set():
+                        result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
+                    if not stop_event.is_set():
+                        stream.push_text(result)                    
+                        await stream.flush()
+                    if not stop_event.is_set():
+                        await send_audio_task
+
                 # elif same_uterance and self.last_agent_message is not None:
                 elif False:
+                    self.last_user_interaction = time.time()
                     logging.info("Updating Message")
                     self.update_state(processing=True)
                     stream = tts.stream()
@@ -558,6 +593,7 @@ class PurfectMe:
             except Exception as e:
                 logging.error(f"An unexpected error occurred in process_user_chat_message: {e}", exc_info=True)
             finally:
+                self.last_user_interaction = time.time()
                 await stream.aclose()
                 self.update_state(processing=False)
                 logging.info("EXITED TASK: process chat message")
