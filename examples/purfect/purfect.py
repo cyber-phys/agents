@@ -38,7 +38,6 @@ from prompt_manager import read_prompt_file
 import time
 import numpy as np
 from livekit.rtc._proto.room_pb2 import DataPacketKind
-import threading
 from queue import Queue
 import random
 from chat import ChatMessage, ChatManager
@@ -98,8 +97,8 @@ class PurfectMe:
         self.stt_user_queue = Queue()
         self.stt_user_consumer_task = None
         self.user_chat_message_stop_events = []
-        self.process_user_chat_lock = threading.Lock()
-
+        self.process_user_chat_lock = asyncio.Lock()
+        
         # plugins
         complete_prompt_default = SYSTEM_PROMPT_VOICE + "\n" + VIVI_PROMPT
         
@@ -196,7 +195,6 @@ class PurfectMe:
 
         self.user_tts_lock = asyncio.Lock()
         self.process_chatgpt_result_task_handle = None
-        self.shared_event_loop = asyncio.new_event_loop()
 
         self.last_user_interaction = time.time()
 
@@ -219,7 +217,7 @@ class PurfectMe:
         await asyncio.sleep(5) #TODO adjust this time
 
         sip = self.ctx.room.name.startswith("sip")
-        self.create_message_task(intro_text(sip, self.starting_messages), False, True)
+        self.ctx.create_task(self.create_message_task(intro_text(sip, self.starting_messages), False, True))
         self.update_state()
         self.tasks.append(self.ctx.create_task(self.check_user_inactivity()))
 
@@ -262,7 +260,7 @@ class PurfectMe:
         if message.deleted:
             return
         
-        self.create_message_task(message.message, add_message=False)
+        self.ctx.create_task(self.create_message_task(message.message, add_message=False))
 
     def on_track_subscribed(
         self,
@@ -279,6 +277,7 @@ class PurfectMe:
             self.base_prompt = SYSTEM_PROMPT_VIDEO # We are using video so use video prompt
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
             self.ctx.create_task(self.process_user_audio_track(track))
+
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
         async for video_frame_event in video_stream:
@@ -339,7 +338,7 @@ class PurfectMe:
                 # User has been inactive for the specified duration
                 # Generate a response or perform any desired action
                 response = "Hey there! It's been a while since we last chatted. Is there anything I can help you with?"
-                self.create_message_task(response, empty_message=True)
+                self.ctx.create_task(self.create_message_task(response, empty_message=True))
             else:
                 # User has been active, reset the timer
                 self.last_user_interaction = current_time
@@ -360,21 +359,21 @@ class PurfectMe:
         return last_entries.strip()
     
     # TODO: Clean up create_message_task it is messy
-    def create_message_task(self, message: str, same_uterance: bool = False, speak_only: bool = False, add_message: bool = True, empty_message: bool = False):
+    async def create_message_task(self, message: str, same_uterance: bool = False, speak_only: bool = False, add_message: bool = True, empty_message: bool = False):
         # Stop all previous running process_user_chat_message jobs
         if self.user_chat_message_stop_events:
-            logging.info("stoping thread")
+            logging.info("stopping task")
             for stop_event in self.user_chat_message_stop_events:
                 stop_event.set()
 
         # Create a new stop event for the current uterance
-        stop_event = threading.Event()
+        stop_event = asyncio.Event()
         self.user_chat_message_stop_events.append(stop_event)
 
-        # Start a new thread for processing the user chat message
+        # Start a new task for processing the user chat message
         logging.info(f"Create new task: {message}")
-        threading.Thread(target=self.process_user_chat_message, args=(message, same_uterance, stop_event, speak_only, add_message, empty_message)).start()
-    
+        self.ctx.create_task(self.process_user_chat_message(message, same_uterance, stop_event, speak_only, add_message, empty_message))
+        
     async def update_transcript(self):
         # Consume the generated text responses
         async for text_response in self.bakllava_stream:
@@ -468,7 +467,7 @@ class PurfectMe:
             else: logging.info(f"Diff uterance: {elapsed_time}")
 
 
-            self.create_message_task(buffered_text, same_uterance)
+            self.ctx.create_task(self.create_message_task(buffered_text, same_uterance))
 
             buffered_text = ""
             start_of_uterance = True
@@ -477,11 +476,9 @@ class PurfectMe:
 
     # TODO we should have a finished event
     # TODO log if we are waiting on lock
-    def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: threading.Event, speak_only: bool = False, add_message: bool = True, empty_message: bool = False):
-        async def process_chat_message():
-            tts = TTS(
-            # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
-            )
+    async def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: asyncio.Event, speak_only: bool = False, add_message: bool = True, empty_message: bool = False):
+        tts = TTS()
+        async with self.process_user_chat_lock:
             try:
                 if speak_only:
                     logging.info("Intro")
@@ -490,7 +487,7 @@ class PurfectMe:
                     self.audio_out_gain = 1.0
                     msg = ChatGPTMessage(role=ChatGPTMessageRole.assistant, content=uterance)
                     self.openrouter_plugin._messages.append(msg)
-                    send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
+                    send_audio_task = self.ctx.create_task(self.send_audio_stream(stream, stop_event, False))
                     if not stop_event.is_set():
                         stream.push_text(uterance)
                         await stream.flush()
@@ -505,7 +502,7 @@ class PurfectMe:
 
                     chatgpt_stream = self.openrouter_plugin.add_message(message=None)
                     
-                    send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
+                    send_audio_task = self.ctx.create_task(self.send_audio_stream(stream, stop_event, False))
                     if not stop_event.is_set():
                         result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
                     if not stop_event.is_set():
@@ -570,7 +567,7 @@ class PurfectMe:
                     self.last_user_message = chat_message
                     chatgpt_stream = self.openrouter_plugin.add_message(msg)
                     
-                    send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
+                    send_audio_task = self.ctx.create_task(self.send_audio_stream(stream, stop_event, False))
                     if not stop_event.is_set():
                         result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
                     if not stop_event.is_set():
@@ -588,13 +585,6 @@ class PurfectMe:
                 await stream.aclose()
                 self.update_state(processing=False)
                 logging.info("EXITED TASK: process chat message")
-
-        def run_async_chat_message():
-            with self.process_user_chat_lock:
-                asyncio.set_event_loop(self.shared_event_loop)
-                self.shared_event_loop.run_until_complete(process_chat_message())
-
-        threading.Thread(target=run_async_chat_message).start()
 
     # TODO: create local log of all voice transcriptions 
     async def process_agent_stt_stream(self, stream):
@@ -651,7 +641,7 @@ class PurfectMe:
         except Exception as e:
             logging.info(f"Error: {str(e)}")
 
-    async def process_chatgpt_result(self, text_stream, stop_event: threading.Event = None):
+    async def process_chatgpt_result(self, text_stream, stop_event: asyncio.Event = None):
         logging.info("Process ChatGPT Result")
         self.audio_out_gain = 1.0
         # ChatGPT is streamed, so we'll flip the state immediately
@@ -687,7 +677,7 @@ class PurfectMe:
         finally:
             self.update_state(processing=False)
 
-    async def process_chatgpt_result_return(self, text_stream, stop_event: threading.Event = None):
+    async def process_chatgpt_result_return(self, text_stream, stop_event: asyncio.Event = None):
         try:
             all_text = ""
             async for text in text_stream:
@@ -707,7 +697,7 @@ class PurfectMe:
             logging.error(f"An error occurred while processing ChatGPT result: {e}", exc_info=True)
             raise e
 
-    async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent], stop_event: threading.Event = None, close_stream: bool = True):
+    async def send_audio_stream(self, tts_stream: AsyncIterable[SynthesisEvent], stop_event: asyncio.Event = None, close_stream: bool = True):
         try:
             self.start_of_message = True
             async for e in tts_stream:
