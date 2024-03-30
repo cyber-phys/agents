@@ -196,7 +196,6 @@ class PurfectMe:
 
         self.user_tts_lock = asyncio.Lock()
         self.process_chatgpt_result_task_handle = None
-        self.user_tts_thread = None
         self.shared_event_loop = asyncio.new_event_loop()
 
         self.last_user_interaction = time.time()
@@ -222,9 +221,6 @@ class PurfectMe:
         sip = self.ctx.room.name.startswith("sip")
         self.create_message_task(intro_text(sip, self.starting_messages), False, True)
         self.update_state()
-        if self.user_tts_thread:
-            self.user_tts_thread.start()
-        else: logging.info("TTS has not been started")
         self.tasks.append(self.ctx.create_task(self.check_user_inactivity()))
 
 
@@ -282,8 +278,7 @@ class PurfectMe:
             self.video_enabled=True
             self.base_prompt = SYSTEM_PROMPT_VIDEO # We are using video so use video prompt
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
-            self.user_tts_thread = threading.Thread(target=self.process_user_audio_track, args=(track,))
-
+            self.ctx.create_task(self.process_user_audio_track(track))
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
         async for video_frame_event in video_stream:
@@ -334,6 +329,7 @@ class PurfectMe:
         else:
             logging.info("No active speaker")
 
+    # TODO: Clean up create_message_task it is messy
     async def check_user_inactivity(self):
         inactive_duration = 60 
         while True:
@@ -363,6 +359,7 @@ class PurfectMe:
 
         return last_entries.strip()
     
+    # TODO: Clean up create_message_task it is messy
     def create_message_task(self, message: str, same_uterance: bool = False, speak_only: bool = False, add_message: bool = True, empty_message: bool = False):
         # Stop all previous running process_user_chat_message jobs
         if self.user_chat_message_stop_events:
@@ -425,23 +422,17 @@ class PurfectMe:
             stream.push_frame(audio_frame_event.frame)
         await stream.flush()
     
-    def process_user_audio_track(self, track):
-        async def process_audio_stream():
-            audio_stream = rtc.AudioStream(track)
-            stream = self.user_stt_plugin.stream()
-            logging.info("STARTED process_user_audio_track")
-            self.ctx.create_task(self.process_user_stt_stream(stream))
+    async def process_user_audio_track(self, track):
+        audio_stream = rtc.AudioStream(track)
+        stream = self.user_stt_plugin.stream()
+        logging.info("STARTED process_user_audio_track")
+        self.ctx.create_task(self.process_user_stt_stream(stream))
 
-            async for audio_frame_event in audio_stream:
-                stream.push_frame(audio_frame_event.frame)
+        async for audio_frame_event in audio_stream:
+            stream.push_frame(audio_frame_event.frame)
 
-            await stream.flush()
-            logging.info("STOPPED process_user_audio_track")
-
-        def run_async_audio_stream():
-            asyncio.run(process_audio_stream())
-
-        threading.Thread(target=run_async_audio_stream).start()
+        await stream.flush()
+        logging.info("STOPPED process_user_audio_track")
 
     #TODO: is there a better way to handel timer?
     #TODO: better interuption logic
