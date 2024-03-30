@@ -544,7 +544,7 @@ class PurfectMe:
                     self.update_state(processing=True)
                     send_audio_task = asyncio.create_task(self.send_audio_stream(stream, stop_event, False))
                     if not stop_event.is_set(): 
-                        result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event)
+                        result = await self.process_chatgpt_result_return(chatgpt_stream, stop_event, create_message=False)
                     if not stop_event.is_set():
                         stream.push_text(result)
                         await stream.flush()
@@ -697,8 +697,8 @@ class PurfectMe:
     #     finally:
     #         self.update_state(processing=False)
 
-    async def process_chatgpt_result_return(self, text_stream, stop_event: asyncio.Event = None):
-        create_message = True
+    async def process_chatgpt_result_return(self, text_stream, stop_event: asyncio.Event = None, create_message: bool = True):
+        self.last_agent_message.highlight_word_count = 0
         try:
             all_text = ""
             async for text in text_stream:
