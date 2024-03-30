@@ -490,12 +490,15 @@ class PurfectMe:
                     self.audio_out_gain = 1.0
                     msg = ChatGPTMessage(role=ChatGPTMessageRole.assistant, content=uterance)
                     self.openrouter_plugin._messages.append(msg)
+                    self.last_agent_message = await self.chat.send_message(uterance)
                     send_audio_task = self.ctx.create_task(self.send_audio_stream(stream, stop_event, False))
                     if not stop_event.is_set():
                         stream.push_text(uterance)
                         await stream.flush()
                     if not stop_event.is_set(): 
                         await send_audio_task
+                        self.last_agent_message.highlight_word_count = len(self.last_agent_message.message.split())
+                        await self.chat.update_message(self.last_agent_message)
 
                 elif empty_message:
                     self.start_agent_message = True
@@ -514,10 +517,11 @@ class PurfectMe:
                         await stream.flush()
                     if not stop_event.is_set():
                         await send_audio_task
+                        self.last_agent_message.highlight_word_count = len(self.last_agent_message.message.split())
+                        await self.chat.update_message(self.last_agent_message)
 
                 elif same_uterance and self.last_user_message is not None:
                     self.agent_transcription = ""
-                    self.last_user_interaction = time.time()
                     logging.info("Updating Message")
                     self.update_state(processing=True)
                     stream = tts.stream()
@@ -546,6 +550,8 @@ class PurfectMe:
                         await stream.flush()
                     if not stop_event.is_set(): 
                         await send_audio_task
+                        self.last_agent_message.highlight_word_count = len(self.last_agent_message.message.split())
+                        await self.chat.update_message(self.last_agent_message)
 
                 else:
                     self.start_agent_message = True
@@ -562,9 +568,13 @@ class PurfectMe:
                             topic="lk-chat-topic",
                         )
 
-                    #TODO Fix interupt:
+                    #TODO Fix interrupt:
                     if self.last_agent_message:
-                        self.openrouter_plugin.interrupt(self.last_agent_message.message) # TODO: Make sure this is working
+                        # Trim the last agent message content to the number of words in highlight_word_count
+                        trimmed_message = ' '.join(self.last_agent_message.message.split()[:self.last_agent_message.highlight_word_count])
+                        print(trimmed_message)
+                        self.openrouter_plugin.interrupt(trimmed_message) # TODO: Make sure this is working
+
                     # else:
                         # self.openrouter_plugin.interrupt()
                     msg = self.process_chatgpt_input(uterance)
@@ -579,6 +589,8 @@ class PurfectMe:
                         await stream.flush()
                     if not stop_event.is_set():
                         await send_audio_task
+                        self.last_agent_message.highlight_word_count = len(self.last_agent_message.message.split())
+                        await self.chat.update_message(self.last_agent_message)
 
             except StopProcessingException:
                 logging.info("process_user_chat_message stop event")
@@ -602,23 +614,29 @@ class PurfectMe:
             if self.start_agent_message and last_event_final:
                 self.agent_transcription = ""
                 self.start_agent_message = False
-                self.last_agent_message = await self.chat.send_message(temp_text)
+                self.last_agent_message.highlight_word_count = len(temp_text.split())
+                await self.chat.update_message(self.last_agent_message)
+                # self.last_agent_message = await self.chat.send_message(temp_text)
 
             if event.is_final:
                 self.agent_transcription = " ".join([self.agent_transcription, temp_text])
-                self.last_agent_message.message = self.agent_transcription
+                # self.last_agent_message.message = self.agent_transcription
+                self.last_agent_message.highlight_word_count = len(self.agent_transcription.split())
                 await self.chat.update_message(self.last_agent_message)
+                # await self.chat.update_message(self.last_agent_message)
                 last_event_final = True
                 continue
 
             # Update the message content with the new buffered_text
             updated_message_content = self.agent_transcription + temp_text
+            self.last_agent_message.highlight_word_count = len(updated_message_content.split())
+            await self.chat.update_message(self.last_agent_message)
 
             # Update the "message" field of self.last_agent_message
-            self.last_agent_message.message = updated_message_content
+            # self.last_agent_message.message = updated_message_content
 
             # Send the updated message using self.chat.update_message
-            await self.chat.update_message(self.last_agent_message)
+            # await self.chat.update_message(self.last_agent_message)
             last_event_final = False
           
     def process_chatgpt_input(self, message):
@@ -680,6 +698,7 @@ class PurfectMe:
     #         self.update_state(processing=False)
 
     async def process_chatgpt_result_return(self, text_stream, stop_event: asyncio.Event = None):
+        create_message = True
         try:
             all_text = ""
             async for text in text_stream:
@@ -687,6 +706,13 @@ class PurfectMe:
                     logging.info("STOP EVENT process text stream")
                     raise StopProcessingException("Stop event set, halting text stream processing.")
                 all_text += text
+
+                if create_message:
+                    self.last_agent_message = await self.chat.send_message(all_text)
+                    create_message = False
+                else:
+                    self.last_agent_message.message = all_text
+                    await self.chat.update_message(self.last_agent_message)
             
             if stop_event is not None and stop_event.is_set():
                 logging.info("STOP EVENT process text stream")

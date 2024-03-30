@@ -89,7 +89,7 @@ class ChatMessage:
     timestamp: datetime = field(default_factory=datetime.now)
     deleted: bool = field(default=False)
     is_assistant: bool = field(default=False)
-
+    highlight_word_count: int = 0
 
     # These fields are not part of the wire protocol. They are here to provide
     # context for the application.
@@ -121,6 +121,7 @@ class ChatMessage:
             "message": self.message,
             "timestamp": int(self.timestamp.timestamp() * 1000),
             "is_assistant": self.is_assistant,
+            "highlight_word_count": self.highlight_word_count,
         }
         if self.deleted:
             d["deleted"] = True
