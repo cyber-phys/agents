@@ -136,10 +136,6 @@ class PurfectMe:
             model='enhanced-phonecall'
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
-
-        self.tts_plugin = TTS(
-            # api_url="http://10.0.0.119:6666", sample_rate=COQUI_TTS_SAMPLE_RATE
-        )
         
 
         self.ctx: agents.JobContext = ctx
@@ -331,7 +327,7 @@ class PurfectMe:
     # TODO: Clean up create_message_task it is messy
     async def check_user_inactivity(self):
         inactive_duration = 60 
-        while True:
+        while self._agent_state != AgentState.IDLE:
             await asyncio.sleep(inactive_duration)
             current_time = time.time()
             if current_time - self.last_user_interaction > inactive_duration and self._agent_state ==  AgentState.LISTENING:
@@ -476,6 +472,7 @@ class PurfectMe:
             buffered_text = ""
             start_of_uterance = True
             is_first_uterance = False
+        stream.aclose()
         logging.info("STOPED process_user_stt_stream")
 
     async def process_user_chat_message(self, uterance: str, same_uterance: bool, stop_event: asyncio.Event, speak_only: bool = False, add_message: bool = True, empty_message: bool = False):
@@ -638,6 +635,9 @@ class PurfectMe:
             # Send the updated message using self.chat.update_message
             # await self.chat.update_message(self.last_agent_message)
             last_event_final = False
+        
+        stream.aclose()
+        logging.info("STOPED process_agent_stt_stream")
           
     def process_chatgpt_input(self, message):
         if self.video_enabled:
