@@ -334,7 +334,7 @@ class PurfectMe:
         while True:
             await asyncio.sleep(inactive_duration)
             current_time = time.time()
-            if current_time - self.last_user_interaction > inactive_duration:
+            if current_time - self.last_user_interaction > inactive_duration and self._agent_state ==  AgentState.LISTENING:
                 # User has been inactive for the specified duration
                 # Generate a response or perform any desired action
                 response = "Hey there! It's been a while since we last chatted. Is there anything I can help you with?"
@@ -775,8 +775,8 @@ class PurfectMe:
         elif interrupt is not None:
             self._sending_audio = False
             self._processing = False
-            state = AgentState.LISTENING
             self._agent_interupted = True
+            state = AgentState.LISTENING
         else:
             if sending_audio is not None:
                 self._sending_audio = sending_audio
