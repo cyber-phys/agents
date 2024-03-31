@@ -210,7 +210,7 @@ class ChatGPTPlugin:
                     n=1,
                     stream=True,
                     messages=[prompt_message.to_api()] + chat_messages,
-                    max_tokens=300,
+                    max_tokens=30000,
                 ),
                 600,
             )
@@ -271,3 +271,16 @@ class ChatGPTPlugin:
 
     def prompt(self, new_prompt: str):
         self._prompt = new_prompt
+
+    def get_chat_history(self) -> str:
+        chat_history = ""
+        for message in self._messages:
+            role = "user" if message.role == ChatGPTMessageRole.user else "assistant"
+            content = message.content
+            
+            if isinstance(content, list):
+                content = "\n".join(item["text"] for item in content if item["type"] == "text")
+            
+            chat_history += f"[{role}]: {content}\n\n"
+        
+        return chat_history.strip()

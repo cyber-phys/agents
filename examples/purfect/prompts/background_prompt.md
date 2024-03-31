@@ -1,0 +1,3 @@
+Using html, css, and three.js create an interactive peice of digital art that captures the vibe of this conversation. It is important that your artwork contains no text as it will be used as an abstract art for the background of this chat app.
+
+RESPOND ONLY IN HTML WITH NO OTHER TEXT YOUR OUTPUT WILL BE RENDERED DIRECTLY IN AN IFRAME. YOU NEED TO WRITE AN HTML FILE WHICH STARTS WITH `&lt;!DOCTYPE html&gt;` AND ENDS WITH `&lt;/html&gt;`.

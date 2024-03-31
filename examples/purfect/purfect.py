@@ -48,6 +48,10 @@ SYSTEM_PROMPT_VOICE = read_prompt_file("prompts/system_prompt_voice.md")
 
 SYSTEM_PROMPT_VIDEO = read_prompt_file("prompts/system_prompt_video.md")
 
+PROMPT_BACKGROUND = read_prompt_file("prompts/background_prompt.md")
+
+SYSTEM_PROMPT_BACKGROUND = read_prompt_file("prompts/background_system.md")
+
 VIVI_PROMPT = read_prompt_file("prompts/vivi.md")
 
 SIP_INTRO = "Hello this is vivi!"
@@ -121,6 +125,14 @@ class PurfectMe:
             prompt="You are a video frame transcription tool", 
             message_capacity=25, 
             model="anthropic/claude-3-haiku:beta",
+            api_key=os.getenv("OPENROUTER_API_KEY", os.environ["OPENROUTER_API_KEY"]),
+            base_url="https://openrouter.ai/api/v1"
+        )
+
+        self.background_gen = ChatGPTPlugin(
+            prompt=SYSTEM_PROMPT_BACKGROUND,
+            message_capacity=25, 
+            model="anthropic/claude-3-opus",
             api_key=os.getenv("OPENROUTER_API_KEY", os.environ["OPENROUTER_API_KEY"]),
             base_url="https://openrouter.ai/api/v1"
         )
@@ -216,6 +228,7 @@ class PurfectMe:
         self.ctx.create_task(self.create_message_task(intro_text(sip, self.starting_messages), False, True))
         self.update_state()
         self.tasks.append(self.ctx.create_task(self.check_user_inactivity()))
+        self.tasks.append(self.ctx.create_task(self.update_background()))
 
 
     def on_data_received(self, data_packet: rtc.DataPacket):
@@ -338,6 +351,62 @@ class PurfectMe:
             else:
                 # User has been active, reset the timer
                 self.last_user_interaction = current_time
+
+    # TODO: Clean up create_message_task it is messy
+    async def update_background(self):
+        inactive_duration = 60
+        prompt = (f"{PROMPT_BACKGROUND}\n prompt: ```{self.character_prompt}```")
+        html_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=prompt)
+        html_stream = self.background_gen.add_message(html_msg)
+        all_text = ""
+        async def process_html_stream():
+                all_text = ""
+                async for text in html_stream:
+                    all_text += text
+                return all_text
+        
+        all_text = await asyncio.gather(process_html_stream())
+        all_text = all_text[0]  # asyncio.gather returns a list, so we take the first (and only) element
+
+        logging.info(all_text)
+        background_data = {
+            "html": all_text
+        }
+        
+        
+        await self.ctx.room.local_participant.publish_data(
+            payload=json.dumps(background_data),
+            kind=DataPacketKind.KIND_RELIABLE,
+            topic="background",
+        )
+        self.background_gen._messages=None
+
+        while True:
+            await asyncio.sleep(inactive_duration)
+            chat_history = self.openrouter_plugin.get_chat_history()
+            prompt = (f"{PROMPT_BACKGROUND}\n prompt: ```{chat_history[-3000:]}```")
+            html_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=prompt)
+            html_stream = self.background_gen.add_message(html_msg)
+            all_text = ""
+            async def process_html_stream():
+                    all_text = ""
+                    async for text in html_stream:
+                        all_text += text
+                    return all_text
+            
+            all_text = await asyncio.gather(process_html_stream())
+            all_text = all_text[0]  # asyncio.gather returns a list, so we take the first (and only) element
+
+            logging.info(all_text)
+            background_data = {
+                "html": all_text
+            }
+            await self.ctx.room.local_participant.publish_data(
+                payload=json.dumps(background_data),
+                kind=DataPacketKind.KIND_RELIABLE,
+                topic="background",
+            )
+            self.background_gen._messages=None
 
     def get_last_entries(self, num_entries):
         last_entries = ""
