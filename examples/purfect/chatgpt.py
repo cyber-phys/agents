@@ -75,6 +75,10 @@ class ChatGPTPlugin:
         self._needs_interrupt = False
         self._save_response = True
 
+    def clear_history(self):
+        """Clears all messages from the chat history."""
+        self._messages = []   
+
     def interrupt(self):
         """Interrupt a currently streaming response (if there is one)"""
         if self._producing_response:
@@ -210,7 +214,7 @@ class ChatGPTPlugin:
                     n=1,
                     stream=True,
                     messages=[prompt_message.to_api()] + chat_messages,
-                    max_tokens=30000,
+                    max_tokens=320000,
                 ),
                 600,
             )
@@ -272,9 +276,10 @@ class ChatGPTPlugin:
     def prompt(self, new_prompt: str):
         self._prompt = new_prompt
 
-    def get_chat_history(self) -> str:
+    def get_chat_history(self, last_x_chats: Optional[int] = None) -> str:
         chat_history = ""
-        for message in self._messages:
+        messages_to_process = self._messages[-last_x_chats:] if last_x_chats is not None else self._messages
+        for message in messages_to_process:
             role = "user" if message.role == ChatGPTMessageRole.user else "assistant"
             content = message.content
             

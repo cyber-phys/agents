@@ -1,0 +1,3 @@
+Using HTML, CSS, JavaScript, and Three.js, create a fun, interactive game that embodies the playful nature of this conversation. The game should be engaging and visually appealing, making use of Three.js for 3D effects.
+
+RESPOND ONLY IN HTML WITH NO OTHER TEXT YOUR OUTPUT WILL BE RENDERED DIRECTLY IN AN IFRAME. YOU NEED TO WRITE AN HTML FILE WHICH STARTS WITH `&lt;!DOCTYPE html&gt;` AND ENDS WITH `&lt;/html&gt;`.
