@@ -494,7 +494,7 @@ class PurfectMe:
     async def process_user_stt_stream(self, stream):
         logging.info("STARTED process_user_stt_stream")
         buffered_text = ""
-        same_uterance_timeout = 2 # Time in seconds in which to count stt result as the same uterance as previous result
+        same_uterance_timeout = 4 # Time in seconds in which to count stt result as the same uterance as previous result
         utterance_start_time = 0
         utterance_stop_time = 0
         start_of_uterance = True
