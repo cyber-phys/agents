@@ -813,6 +813,19 @@ class PurfectMe:
         except Exception as e:
             logging.error(f"An error occurred while canceling the audio stream task: {e}", exc_info=True)
 
+        try:
+            # Cancel and close STT streams
+            if self.agent_stt_plugin:
+                await self.agent_stt_plugin.aclose()
+            if self.user_stt_plugin:
+                await self.user_stt_plugin.aclose()
+
+            # Cancel and close TTS streams
+            if self.tts_plugin:
+                await self.tts_plugin.aclose()
+        except Exception as e:
+            logging.error(f"An error occurred while closing the stt and tts streams {e}", exc_info=True)
+
         for task in self.tasks:
             try:
                 task.cancel()
