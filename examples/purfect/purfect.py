@@ -792,8 +792,10 @@ class PurfectMe:
 
                 if e.type == SynthesisEventType.STARTED:
                     self.update_state(sending_audio=True)
+                    logging.info("send_audio_stream: sending_audio=True")
                 elif e.type == SynthesisEventType.FINISHED:
                     self.update_state(sending_audio=False)
+                    logging.info("send_audio_stream: sending_audio=Flase")
                     break
                 elif e.type == SynthesisEventType.AUDIO:
                     if self._agent_state == AgentState.LISTENING:
