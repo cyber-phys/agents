@@ -48,9 +48,9 @@ SYSTEM_PROMPT_VOICE = read_prompt_file("prompts/system_prompt_voice.md")
 
 SYSTEM_PROMPT_VIDEO = read_prompt_file("prompts/system_prompt_video.md")
 
-PROMPT_BACKGROUND = read_prompt_file("prompts/animation_prompt.md")
+PROMPT_CANVAS = read_prompt_file("prompts/animation_prompt.md")
 
-SYSTEM_PROMPT_BACKGROUND = read_prompt_file("prompts/background_system.md")
+SYSTEM_PROMPT_CANVAS = read_prompt_file("prompts/background_system.md")
 
 VIVI_PROMPT = read_prompt_file("prompts/vivi.md")
 
@@ -66,7 +66,6 @@ async def intro_text_stream(sip: bool):
 
     yield INTRO
 
-#TODO we need to fix agent states
 AgentState = Enum("AgentState", "IDLE, LISTENING, THINKING, SPEAKING")
 
 COQUI_TTS_SAMPLE_RATE = 24000
@@ -129,8 +128,8 @@ class PurfectMe:
             base_url="https://openrouter.ai/api/v1"
         )
 
-        self.background_gen = ChatGPTPlugin(
-            prompt=SYSTEM_PROMPT_BACKGROUND,
+        self.canvas_openrouter_plugin = ChatGPTPlugin(
+            prompt=SYSTEM_PROMPT_CANVAS,
             message_capacity=2, 
             model="anthropic/claude-3-opus",
             api_key=os.getenv("OPENROUTER_API_KEY", os.environ["OPENROUTER_API_KEY"]),
@@ -176,8 +175,6 @@ class PurfectMe:
 
         self.base_prompt = SYSTEM_PROMPT_VOICE
 
-        self.localVideoTranscript = False
-
         self.audio_stream_task: asyncio.Task = None
 
         self.tasks = []
@@ -193,6 +190,12 @@ class PurfectMe:
         self.video_transcription_model = "anthropic/claude-3-haiku:beta"
         self.video_transcription_interval = 60
         self.chatmodel_multimodal = False #TODO: Set this in character card
+        self.video_system_prompt = SYSTEM_PROMPT_VIDEO
+        self.video_prompt = SYSTEM_PROMPT_VIDEO
+        self.canvas_system_prompt = SYSTEM_PROMPT_CANVAS
+        self.canvas_prompt = PROMPT_CANVAS
+        self.is_canvas_enabled = True
+        self.canvas_model = "anthropic/claude-3-opus"
 
         self.agent_transcription = ""
         self.start_agent_message = True
@@ -230,7 +233,6 @@ class PurfectMe:
         self.tasks.append(self.ctx.create_task(self.check_user_inactivity()))
         self.tasks.append(self.ctx.create_task(self.update_background()))
 
-
     def on_data_received(self, data_packet: rtc.DataPacket):
         try:
             data = json.loads(data_packet.data.decode())
@@ -248,18 +250,27 @@ class PurfectMe:
                 if character_card:
                     self.name = character_card.get("name", "")
                     self.character_prompt = character_card.get("prompt", "")
+                    self.video_system_prompt = character_card.get("video_prompt", SYSTEM_PROMPT_VIDEO)
+                    self.video_prompt = character_card.get("video_prompt", SYSTEM_PROMPT_VIDEO) #todo use this
+                    self.canvas_system_prompt = character_card.get("canvas_system_prompt", SYSTEM_PROMPT_CANVAS)
+                    self.canvas_prompt = character_card.get("canvas_prompt", PROMPT_CANVAS)
                     self.starting_messages = character_card.get("startingMessages", [])
                     self.voice = character_card.get("voice", "")
-                    self.base_model = character_card.get("baseModel", "") #TODO check to make sure we are using this
-                    self.is_video_transcription_enabled = character_card.get("isVideoTranscriptionEnabled", False) #TODO: make this control routing to video model
-                    self.is_video_transcription_continuous = character_card.get("isVideoTranscriptionContinuous", False) #TODO: make this control video transcriptions
-                    self.video_transcription_model = character_card.get("videoTranscriptionModel", "") #TODO use this param
-                    self.video_transcription_interval = int(character_card.get("videoTranscriptionInterval", 60))                    
-                    
+                    self.base_model = character_card.get("baseModel", "mistralai/mixtral-8x7b-instruct:nitro")
+                    self.is_video_transcription_enabled = character_card.get("isVideoTranscriptionEnabled", False)
+                    self.is_video_transcription_continuous = character_card.get("isVideoTranscriptionContinuous", False)
+                    self.video_transcription_model = character_card.get("videoTranscriptionModel", "anthropic/claude-3-haiku:beta")
+                    self.video_transcription_interval = int(character_card.get("videoTranscriptionInterval", 60)) # TODO use this
+                    self.is_canvas_enabled = character_card.get("isCanvasEnabled", True)
+                    self.canvas_model = character_card.get("CanvasModel", "anthropic/claude-3-opus")
+
                     # Update the OpenRouter plugin with the new prompt
                     complete_prompt = self.base_prompt + "\n" + self.character_prompt
                     self.openrouter_plugin.prompt(complete_prompt)
-                    
+                
+                    self.openrouter_plugin.set_model(self.base_model)
+                    self.video_openrouter_plugin.set_model(self.video_transcription_model)
+                    self.canvas_openrouter_plugin.set_model(self.canvas_model)
                     
         except json.JSONDecodeError:
             logging.warning("Failed to parse data packet")
@@ -296,7 +307,7 @@ class PurfectMe:
             # Construct the prompt with the last entries and the Bakllava prompt
             prompt = self.bakllava_prompt + "\n\n" + last_entries
 
-            if self.localVideoTranscript:
+            if self.is_video_transcription_continuous:
                 self.bakllava_stream.push_frame(
                     video_frame_event.frame,
                     prompt=prompt
@@ -321,6 +332,7 @@ class PurfectMe:
             logging.info("No active speaker")
 
     # TODO: Clean up create_message_task it is messy
+    # TODO this is not working right
     async def check_user_inactivity(self):
         inactive_duration = 60
         while self._agent_state != AgentState.IDLE:
@@ -337,10 +349,10 @@ class PurfectMe:
 
     # TODO: Clean up create_message_task it is messy
     async def update_background(self):
-        inactive_duration = 1
-        prompt = (f"{PROMPT_BACKGROUND}\n prompt: ```{self.character_prompt}```")
+        canvas_regen_wait = 60
+        prompt = (f"{PROMPT_CANVAS}\n prompt: ```{self.character_prompt}```")
         html_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=prompt)
-        html_stream = self.background_gen.add_message(html_msg)
+        html_stream = self.canvas_openrouter_plugin.add_message(html_msg)
         logging.info("starting html gen")
         all_text = ""
         async for text in html_stream:
@@ -358,28 +370,28 @@ class PurfectMe:
         )
 
         while self._agent_state != AgentState.IDLE:
-            await asyncio.sleep(inactive_duration)
-            chat_history = self.openrouter_plugin.get_chat_history(4)
-            prompt = (f"{PROMPT_BACKGROUND}\n prompt: ```{chat_history}```")
-            html_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=prompt)
-            self.background_gen.clear_history()
-            html_stream = self.background_gen.add_message(html_msg)
-            all_text = ""
-            logging.info("starting html gen")
-            async for text in html_stream:
-                all_text += text
+            if self.is_canvas_enabled:
+                await asyncio.sleep(canvas_regen_wait)
+                chat_history = self.openrouter_plugin.get_chat_history(4)
+                prompt = (f"{PROMPT_CANVAS}\n prompt: ```{chat_history}```")
+                html_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=prompt)
+                self.canvas_openrouter_plugin.clear_history()
+                html_stream = self.canvas_openrouter_plugin.add_message(html_msg)
+                all_text = ""
+                logging.info("starting html gen")
+                async for text in html_stream:
+                    all_text += text
 
-            logging.info(all_text)
-            background_data = {
-                "html": all_text
-            }
-            await self.ctx.room.local_participant.publish_data(
-                payload=json.dumps(background_data),
-                kind=DataPacketKind.KIND_RELIABLE,
-                topic="background",
-            )
-            logging.info("finished html gen")
-
+                logging.info(all_text)
+                background_data = {
+                    "html": all_text
+                }
+                await self.ctx.room.local_participant.publish_data(
+                    payload=json.dumps(background_data),
+                    kind=DataPacketKind.KIND_RELIABLE,
+                    topic="background",
+                )
+                logging.info("finished html gen")
 
     def get_last_entries(self, num_entries):
         last_entries = ""
@@ -434,7 +446,7 @@ class PurfectMe:
     async def update_transcript_claude(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
         async for video_frame_event in video_stream:
-            if self.localVideoTranscript == False:
+            if self.is_video_transcription_continuous == False:
                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 video_prompt = "Faithfully desribe the image in detail, what is the main focus? Transcribe any text you see."
                 video_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=video_prompt, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
@@ -680,17 +692,19 @@ class PurfectMe:
         
         stream.aclose()
         logging.info("STOPED process_agent_stt_stream")
-          
+
+    # TODO this could be cleaned up      
     def process_chatgpt_input(self, message):
-        if self.video_enabled:
-            last_entries = self.get_last_entries(5)
-            user_message = "Summary of the last few frames: \n\n"  + last_entries + "\n\nUser Message: " + message
+        user_message = message
+        if self.video_enabled and self.is_video_transcription_enabled:
+            if self.is_video_transcription_continuous:
+                last_entries = self.get_last_entries(5)
+                user_message = "Summary of the last few frames: \n\n"  + last_entries + "\n\nUser Message: " + message
             if self.chatmodel_multimodal:
                 msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message, image_data=self.latest_frame, image_width=self.latest_frame_width, image_height=self.latest_frame_height)
             else:
                 msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
         else: 
-            user_message = message
             msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=user_message)
         return msg
     
