@@ -311,23 +311,6 @@ class PurfectMe:
             if not self.run:
                 break
 
-    # #TODO We should wait for tts to finish
-    # def interupt_agent(self):
-    #     if self._agent_state == AgentState.SPEAKING:
-    #         logging.info(f"\n\n{self.agent_transcription}\n\n")
-    #         self.update_state(interrupt=True)
-    #         if self.audio_stream_task and not self.audio_stream_task.done():
-    #             self.audio_stream_task.cancel()
-    #             self.openrouter_plugin.interrupt(self.agent_transcription)
-    #         self.agent_transcription = ""
-
-    #     # TODO: WE NEED to Stop chatgpt generation from conintuing
-    #     elif self._agent_state == AgentState.THINKING:
-    #         self.update_state(interrupt=True)
-    #         if self.audio_stream_task and not self.audio_stream_task.done():
-    #             self.audio_stream_task.cancel()
-    #             self.openrouter_plugin.interrupt_with_user_message()
-
     # TODO better handeling of interuption
     def on_active_speakers_changed(self, speakers: list[rtc.Participant]):
         if speakers:
@@ -719,42 +702,6 @@ class PurfectMe:
             return all_text
         except Exception as e:
             logging.info(f"Error: {str(e)}")
-
-    # async def process_chatgpt_result(self, text_stream, stop_event: asyncio.Event = None):
-    #     logging.info("Process ChatGPT Result")
-    #     self.audio_out_gain = 1.0
-    #     # ChatGPT is streamed, so we'll flip the state immediately
-    #     self.update_state(processing=True)
-
-    #     stream = self.tts_plugin.stream()
-    #     self.audio_stream_task = self.ctx.create_task(self.send_audio_stream(stream, stop_event))
-        
-    #     try:
-    #         all_text = ""
-    #         async for text in text_stream:
-    #             if stop_event is not None and stop_event.is_set():
-    #                 logging.info("STOP EVENT text stream")
-    #                 break
-    #             all_text += text
-            
-    #         if stop_event is not None and stop_event.is_set():
-    #             logging.info("STOP EVENT text stream return")
-    #             self.update_state(processing=False)
-    #             return
-            
-    #         logging.info(all_text)
-            
-    #         self.agent_transcription = ""
-    #         stream.push_text(all_text)
-
-    #         # buffer up the entire response from ChatGPT before sending a chat message
-    #         # await self.chat.send_message(all_text) #TODO uncomment this but we need to figure out how to both stream agent transcript and send the actually text from chat gpt
-    #         await stream.flush()
-
-    #     except Exception as e:
-    #         logging.error(f"An error occurred while processing ChatGPT result: {e}", exc_info=True)
-    #     finally:
-    #         self.update_state(processing=False)
 
     async def process_chatgpt_result_return(self, text_stream, stop_event: asyncio.Event = None, create_message: bool = True):
         self.last_agent_message.highlight_word_count = 0
