@@ -131,7 +131,7 @@ class PurfectMe:
         self.canvas_openrouter_plugin = ChatGPTPlugin(
             prompt=SYSTEM_PROMPT_CANVAS,
             message_capacity=2, 
-            model="anthropic/claude-3-opus",
+            model="anthropic/claude-3-haiku:beta",
             api_key=os.getenv("OPENROUTER_API_KEY", os.environ["OPENROUTER_API_KEY"]),
             base_url="https://openrouter.ai/api/v1"
         )
@@ -196,6 +196,7 @@ class PurfectMe:
         self.canvas_prompt = PROMPT_CANVAS
         self.is_canvas_enabled = True
         self.canvas_model = "anthropic/claude-3-opus"
+        self.canvas_interval = 60
 
         self.agent_transcription = ""
         self.start_agent_message = True
@@ -248,21 +249,23 @@ class PurfectMe:
             elif topic == "character_card":
                 character_card = data.get("character")
                 if character_card:
-                    self.name = character_card.get("name", "")
-                    self.character_prompt = character_card.get("prompt", "")
-                    self.video_system_prompt = character_card.get("video_prompt", SYSTEM_PROMPT_VIDEO)
-                    self.video_prompt = character_card.get("video_prompt", SYSTEM_PROMPT_VIDEO) #todo use this
-                    self.canvas_system_prompt = character_card.get("canvas_system_prompt", SYSTEM_PROMPT_CANVAS)
-                    self.canvas_prompt = character_card.get("canvas_prompt", PROMPT_CANVAS)
-                    self.starting_messages = character_card.get("startingMessages", [])
-                    self.voice = character_card.get("voice", "")
-                    self.base_model = character_card.get("baseModel", "mistralai/mixtral-8x7b-instruct:nitro")
-                    self.is_video_transcription_enabled = character_card.get("isVideoTranscriptionEnabled", False)
-                    self.is_video_transcription_continuous = character_card.get("isVideoTranscriptionContinuous", False)
-                    self.video_transcription_model = character_card.get("videoTranscriptionModel", "anthropic/claude-3-haiku:beta")
-                    self.video_transcription_interval = int(character_card.get("videoTranscriptionInterval", 60)) # TODO use this
-                    self.is_canvas_enabled = character_card.get("isCanvasEnabled", True)
-                    self.canvas_model = character_card.get("CanvasModel", "anthropic/claude-3-opus")
+                    self.name = character_card.get("name") if character_card.get("name", "") != "" else self.name
+                    self.character_prompt = character_card.get("character_prompt") if character_card.get("character_prompt", "") != "" else self.character_prompt
+                    self.video_system_prompt = character_card.get("video_system_prompt") if character_card.get("video_system_prompt", "") != "" else self.video_system_prompt
+                    self.video_prompt = character_card.get("video_prompt") if character_card.get("video_prompt", "") != "" else self.video_prompt
+                    self.canvas_system_prompt = character_card.get("canvas_system_prompt") if character_card.get("canvas_system_prompt", "") != "" else self.canvas_system_prompt
+                    self.canvas_prompt = character_card.get("canvas_prompt") if character_card.get("canvas_prompt", "") != "" else self.canvas_prompt
+                    self.starting_messages = character_card.get("starting_messages") if character_card.get("starting_messages", []) != [] else self.starting_messages
+                    self.voice = character_card.get("voice") if character_card.get("voice", "") != "" else self.voice
+                    self.base_model = character_card.get("base_model") if character_card.get("base_model", "") != "" else self.base_model
+                    self.is_video_transcription_enabled = bool(character_card.get("is_video_transcription_enabled")) if character_card.get("is_video_transcription_enabled", "") != "" else self.is_video_transcription_enabled
+                    self.is_video_transcription_continuous = bool(character_card.get("is_video_transcription_continuous")) if character_card.get("is_video_transcription_continuous", "") != "" else self.is_video_transcription_continuous
+                    self.video_transcription_model = character_card.get("video_transcription_model") if character_card.get("video_transcription_model", "") != "" else self.video_transcription_model
+                    self.video_transcription_interval = int(character_card.get("video_transcription_interval")) if character_card.get("video_transcription_interval", "") != "" else self.video_transcription_interval
+                    self.is_canvas_enabled = bool(character_card.get("is_canvas_enabled")) if character_card.get("is_canvas_enabled", "") != "" else self.is_canvas_enabled
+                    self.canvas_model = character_card.get("canvas_model") if character_card.get("canvas_model", "") != "" else self.canvas_model
+                    self.canvas_interval = int(character_card.get("canvas_interval")) if character_card.get("canvas_interval", "") != "" else self.canvas_interval
+
 
                     # Update the OpenRouter plugin with the new prompt
                     complete_prompt = self.base_prompt + "\n" + self.character_prompt
@@ -271,6 +274,25 @@ class PurfectMe:
                     self.openrouter_plugin.set_model(self.base_model)
                     self.video_openrouter_plugin.set_model(self.video_transcription_model)
                     self.canvas_openrouter_plugin.set_model(self.canvas_model)
+
+                    #                     # Log the values set for the character card
+                    # logging.info(f"Character card updated with values: "
+                    #              f"Name: {self.name}, "
+                    #              f"Character Prompt: {self.character_prompt}, "
+                    #              f"Video System Prompt: {self.video_system_prompt}, "
+                    #              f"Video Prompt: {self.video_prompt}, "
+                    #              f"Canvas System Prompt: {self.canvas_system_prompt}, "
+                    #              f"Canvas Prompt: {self.canvas_prompt}, "
+                    #              f"Starting Messages: {self.starting_messages}, "
+                    #              f"Voice: {self.voice}, "
+                    #              f"Base Model: {self.base_model}, "
+                    #              f"Video Transcription Enabled: {self.is_video_transcription_enabled}, "
+                    #              f"Video Transcription Continuous: {self.is_video_transcription_continuous}, "
+                    #              f"Video Transcription Model: {self.video_transcription_model}, "
+                    #              f"Video Transcription Interval: {self.video_transcription_interval}, "
+                    #              f"Canvas Enabled: {self.is_canvas_enabled}, "
+                    #              f"Canvas Model: {self.canvas_model}, "
+                    #              f"Canvas Interval: {self.canvas_interval}")
                     
         except json.JSONDecodeError:
             logging.warning("Failed to parse data packet")
@@ -349,7 +371,6 @@ class PurfectMe:
 
     # TODO: Clean up create_message_task it is messy
     async def update_background(self):
-        canvas_regen_wait = 60
         prompt = (f"{PROMPT_CANVAS}\n prompt: ```{self.character_prompt}```")
         html_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=prompt)
         html_stream = self.canvas_openrouter_plugin.add_message(html_msg)
@@ -371,7 +392,7 @@ class PurfectMe:
 
         while self._agent_state != AgentState.IDLE:
             if self.is_canvas_enabled:
-                await asyncio.sleep(canvas_regen_wait)
+                await asyncio.sleep(self.canvas_interval)
                 chat_history = self.openrouter_plugin.get_chat_history(4)
                 prompt = (f"{PROMPT_CANVAS}\n prompt: ```{chat_history}```")
                 html_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=prompt)
@@ -762,6 +783,12 @@ class PurfectMe:
                     if self._agent_state == AgentState.LISTENING:
                         # Stop the audio stream if the agent is listening
                         break
+
+                    # Ensure the buffer length is a multiple of the item size (2 bytes for int16)
+                    buffer = e.audio.data.data
+                    item_size = 2
+                    if len(buffer) % item_size != 0:
+                        buffer = buffer[:-(len(buffer) % item_size)]
                 
                     # Convert memoryview to NumPy array
                     audio_data = np.frombuffer(e.audio.data.data, dtype=np.int16)
@@ -827,18 +854,18 @@ class PurfectMe:
         except Exception as e:
             logging.error(f"An error occurred while canceling the audio stream task: {e}", exc_info=True)
 
-        try:
-            # Cancel and close STT streams
-            if self.agent_stt_plugin:
-                await self.agent_stt_plugin.aclose()
-            if self.user_stt_plugin:
-                await self.user_stt_plugin.aclose()
+        # try:
+        #     # Cancel and close STT streams
+        #     if self.agent_stt_plugin:
+        #         await self.agent_stt_plugin.aclose()
+        #     if self.user_stt_plugin:
+        #         await self.user_stt_plugin.aclose()
 
-            # Cancel and close TTS streams
-            if self.tts_plugin:
-                await self.tts_plugin.aclose()
-        except Exception as e:
-            logging.error(f"An error occurred while closing the stt and tts streams {e}", exc_info=True)
+        #     # Cancel and close TTS streams
+        #     if self.tts_plugin:
+        #         await self.tts_plugin.aclose()
+        # except Exception as e:
+        #     logging.error(f"An error occurred while closing the stt and tts streams {e}", exc_info=True)
 
         for task in self.tasks:
             try:
