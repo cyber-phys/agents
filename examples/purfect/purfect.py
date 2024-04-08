@@ -274,25 +274,6 @@ class PurfectMe:
                     self.openrouter_plugin.set_model(self.base_model)
                     self.video_openrouter_plugin.set_model(self.video_transcription_model)
                     self.canvas_openrouter_plugin.set_model(self.canvas_model)
-
-                    #                     # Log the values set for the character card
-                    # logging.info(f"Character card updated with values: "
-                    #              f"Name: {self.name}, "
-                    #              f"Character Prompt: {self.character_prompt}, "
-                    #              f"Video System Prompt: {self.video_system_prompt}, "
-                    #              f"Video Prompt: {self.video_prompt}, "
-                    #              f"Canvas System Prompt: {self.canvas_system_prompt}, "
-                    #              f"Canvas Prompt: {self.canvas_prompt}, "
-                    #              f"Starting Messages: {self.starting_messages}, "
-                    #              f"Voice: {self.voice}, "
-                    #              f"Base Model: {self.base_model}, "
-                    #              f"Video Transcription Enabled: {self.is_video_transcription_enabled}, "
-                    #              f"Video Transcription Continuous: {self.is_video_transcription_continuous}, "
-                    #              f"Video Transcription Model: {self.video_transcription_model}, "
-                    #              f"Video Transcription Interval: {self.video_transcription_interval}, "
-                    #              f"Canvas Enabled: {self.is_canvas_enabled}, "
-                    #              f"Canvas Model: {self.canvas_model}, "
-                    #              f"Canvas Interval: {self.canvas_interval}")
                     
         except json.JSONDecodeError:
             logging.warning("Failed to parse data packet")
