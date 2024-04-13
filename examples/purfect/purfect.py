@@ -40,7 +40,8 @@ import numpy as np
 from livekit.rtc._proto.room_pb2 import DataPacketKind
 from queue import Queue
 import random
-from chat import ChatMessage, ChatManager
+from fal_sd_turbo import FalSDTurbo
+from chat import ChatManager, ChatMessage
 
 load_dotenv('.env')
 
@@ -57,6 +58,9 @@ VIVI_PROMPT = read_prompt_file("prompts/vivi.md")
 SIP_INTRO = "Hello this is vivi!"
 
 INTRO = "Hey I am vivi your video assistant!"
+
+_FAL_OUTPUT_WIDTH = 512
+_FAL_OUTPUT_HEIGHT = 512
 
 # convert intro response to a stream
 async def intro_text_stream(sip: bool):
@@ -96,6 +100,12 @@ class PurfectMe:
         await purfect_me.start()
 
     def __init__(self, ctx: agents.JobContext):
+
+        # FAL SD Turbo Plugin
+        self.falai = FalSDTurbo(key_id="3fe90310-168e-4b8d-bc23-a8b774f53c2f", api_key="33fbc4c45653537ab863cec5a11f6238")
+        self.fal_stream = self.falai.stream()
+        self.video_out = rtc.VideoSource(_FAL_OUTPUT_WIDTH, _FAL_OUTPUT_HEIGHT)
+        self.received_fal_frame = False
 
         self.stt_user_queue = Queue()
         self.stt_user_consumer_task = None
@@ -148,7 +158,6 @@ class PurfectMe:
             # api_key=os.getenv("DEEPGRAM_API_KEY", os.environ["DEEPGRAM_API_KEY"]),
         )
         
-
         self.ctx: agents.JobContext = ctx
         self.chat = ChatManager(ctx.room)
         self.audio_out = rtc.AudioSource(COQUI_TTS_SAMPLE_RATE, COQUI_TTS_CHANNELS)
@@ -219,10 +228,23 @@ class PurfectMe:
         self.ctx.room.on("active_speakers_changed", self.on_active_speakers_changed)
 
         # publish audio track
-        track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
-        await self.ctx.room.local_participant.publish_track(track)
+        audio_track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
+        await self.ctx.room.local_participant.publish_track(audio_track)
 
-        self.tasks.append(self.ctx.create_task(self.process_agent_audio_track(track)))
+        # publish video track
+        video_track = rtc.LocalVideoTrack.create_video_track("agent-video", self.video_out)
+        await self.ctx.room.local_participant.publish_track(video_track)
+
+        # Send an empty frame to initialize the video track
+        argb_frame = rtc.VideoFrame(
+            _FAL_OUTPUT_WIDTH,
+            _FAL_OUTPUT_HEIGHT,
+            rtc.VideoBufferType.ARGB,
+            bytearray(_FAL_OUTPUT_WIDTH * _FAL_OUTPUT_HEIGHT * 4),
+        )
+        self.video_out.capture_frame(argb_frame)
+
+        self.tasks.append(self.ctx.create_task(self.process_agent_audio_track(audio_track)))
 
         # allow the participant to fully subscribe to the agent's audio track, so it doesn't miss
         # anything in the beginning
@@ -293,13 +315,45 @@ class PurfectMe:
     ):
         logging.info(f"NEW TRACK {track.kind}")
         if track.kind == rtc.TrackKind.KIND_VIDEO:
+            self.tasks.append(self.ctx.create_task(self.process_video_track_fal(track))) # FAL input stream processing
+            self.tasks.append(self.ctx.create_task(self.send_fal_frames())) # FAL output stream processing
             self.tasks.append(self.ctx.create_task(self.process_video_track(track)))
             self.tasks.append(self.ctx.create_task(self.update_transcript()))
             self.tasks.append(self.ctx.create_task(self.update_transcript_claude(track)))
             self.video_enabled=True
             self.base_prompt = SYSTEM_PROMPT_VIDEO # We are using video so use video prompt
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
-            self.ctx.create_task(self.process_user_audio_track(track))
+            self.tasks.append(self.ctx.create_task(self.process_user_audio_track(track)))
+
+    # FAL Video processing
+    async def process_video_track_fal(self, track: rtc.Track):
+        video_stream = rtc.VideoStream(track)
+        async for video_frame_event in video_stream:
+            if True: #TODO lets add some logic here lol
+                self.fal_stream.push_frame(
+                    video_frame_event.frame,
+                    prompt=f"webcam screenshot of Iron Man. HD. High Quality.",
+                    strength=0.625,
+                )
+                # Keep sending video frames until we receive a FAL frame
+                if not self.received_fal_frame:
+                    self.video_out.capture_frame(video_frame_event.frame)
+            else:
+                self.video_out.capture_frame(video_frame_event.frame)
+            
+            if not self.run:
+                break
+
+    # FAL send frames
+    async def send_fal_frames(self):
+        async for video_frame in self.fal_stream:
+            self.received_fal_frame = True
+            # if self.game_state.game_state != GAME_STATE.PLAYING:
+            #     continue
+            self.video_out.capture_frame(video_frame)
+
+            if not self.run:
+                break
 
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
@@ -371,7 +425,7 @@ class PurfectMe:
             topic="background",
         )
 
-        while self._agent_state != AgentState.IDLE:
+        while self.run:
             if self.is_canvas_enabled:
                 await asyncio.sleep(self.canvas_interval)
                 chat_history = self.openrouter_plugin.get_chat_history(4)
@@ -865,6 +919,7 @@ class PurfectMe:
         asyncio.create_task(self.disconnect_agent())
 
 if __name__ == "__main__":
+
     logging.basicConfig(
         level=logging.DEBUG,
         filename='purfect.log',  # Specify the log file name
