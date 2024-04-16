@@ -538,11 +538,24 @@ class PurfectMe:
         logging.info("STARTED process_user_audio_track")
         self.ctx.create_task(self.process_user_stt_stream(stream))
 
+        audio_buffer = []
+        max_buffer_size = 500
+
         async for audio_frame_event in audio_stream:
-            if self.user_talking is False:
-                if time.time() - self.user_stopped_talking_time > 5:
-                    continue
-            stream.push_frame(audio_frame_event.frame)
+            audio_buffer.append(audio_frame_event.frame.remix_and_resample(24000, 1))
+            
+            if self.user_talking:
+                for frame in audio_buffer:
+                    stream.push_frame(frame)
+                audio_buffer.clear()
+
+            elif time.time() - self.user_stopped_talking_time < 5:
+                for frame in audio_buffer:
+                    stream.push_frame(frame)
+                audio_buffer.clear()
+
+            if len(audio_buffer) > max_buffer_size:
+                audio_buffer.pop(0)
 
         await stream.flush()
         logging.info("STOPPED process_user_audio_track")
