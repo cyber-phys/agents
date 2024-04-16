@@ -58,14 +58,9 @@ SIP_INTRO = "Hello this is vivi!"
 
 INTRO = "Hey I am vivi your video assistant!"
 
-<<<<<<< HEAD
 SYSTEM_PROMPT_SD = read_prompt_file("prompts/sd_system.md")
 
 PROMPT_SD = read_prompt_file("prompts/sd_prompt.md")
-=======
-_FAL_OUTPUT_WIDTH = 512
-_FAL_OUTPUT_HEIGHT = 512
->>>>>>> 83d12c2 (fal)
 
 # convert intro response to a stream
 async def intro_text_stream(sip: bool):
@@ -105,13 +100,6 @@ class PurfectMe:
         await purfect_me.start()
 
     def __init__(self, ctx: agents.JobContext):
-
-        # FAL SD Turbo Plugin
-        self.falai = FalSDTurbo(key_id="3fe90310-168e-4b8d-bc23-a8b774f53c2f", api_key="33fbc4c45653537ab863cec5a11f6238")
-        self.fal_stream = self.falai.stream()
-        self.video_out = rtc.VideoSource(_FAL_OUTPUT_WIDTH, _FAL_OUTPUT_HEIGHT)
-        self.received_fal_frame = False
-
         self.stt_user_queue = Queue()
         self.stt_user_consumer_task = None
         self.user_chat_message_stop_events = []
@@ -244,19 +232,6 @@ class PurfectMe:
         audio_track = rtc.LocalAudioTrack.create_audio_track("agent-mic", self.audio_out)
         await self.ctx.room.local_participant.publish_track(audio_track)
 
-        # publish video track
-        video_track = rtc.LocalVideoTrack.create_video_track("agent-video", self.video_out)
-        await self.ctx.room.local_participant.publish_track(video_track)
-
-        # Send an empty frame to initialize the video track
-        argb_frame = rtc.VideoFrame(
-            _FAL_OUTPUT_WIDTH,
-            _FAL_OUTPUT_HEIGHT,
-            rtc.VideoBufferType.ARGB,
-            bytearray(_FAL_OUTPUT_WIDTH * _FAL_OUTPUT_HEIGHT * 4),
-        )
-        self.video_out.capture_frame(argb_frame)
-
         self.tasks.append(self.ctx.create_task(self.process_agent_audio_track(audio_track)))
 
         # allow the participant to fully subscribe to the agent's audio track, so it doesn't miss
@@ -328,8 +303,6 @@ class PurfectMe:
     ):
         logging.info(f"NEW TRACK {track.kind}")
         if track.kind == rtc.TrackKind.KIND_VIDEO:
-            self.tasks.append(self.ctx.create_task(self.process_video_track_fal(track))) # FAL input stream processing
-            self.tasks.append(self.ctx.create_task(self.send_fal_frames())) # FAL output stream processing
             self.tasks.append(self.ctx.create_task(self.process_video_track(track)))
             self.tasks.append(self.ctx.create_task(self.update_transcript()))
             self.tasks.append(self.ctx.create_task(self.update_transcript_claude(track)))
@@ -337,36 +310,6 @@ class PurfectMe:
             self.base_prompt = SYSTEM_PROMPT_VIDEO # We are using video so use video prompt
         elif track.kind == rtc.TrackKind.KIND_AUDIO:
             self.tasks.append(self.ctx.create_task(self.process_user_audio_track(track)))
-
-    # FAL Video processing
-    async def process_video_track_fal(self, track: rtc.Track):
-        video_stream = rtc.VideoStream(track)
-        async for video_frame_event in video_stream:
-            if True: #TODO lets add some logic here lol
-                self.fal_stream.push_frame(
-                    video_frame_event.frame,
-                    prompt=f"webcam screenshot of Iron Man. HD. High Quality.",
-                    strength=0.625,
-                )
-                # Keep sending video frames until we receive a FAL frame
-                if not self.received_fal_frame:
-                    self.video_out.capture_frame(video_frame_event.frame)
-            else:
-                self.video_out.capture_frame(video_frame_event.frame)
-            
-            if not self.run:
-                break
-
-    # FAL send frames
-    async def send_fal_frames(self):
-        async for video_frame in self.fal_stream:
-            self.received_fal_frame = True
-            # if self.game_state.game_state != GAME_STATE.PLAYING:
-            #     continue
-            self.video_out.capture_frame(video_frame)
-
-            if not self.run:
-                break
 
     async def process_video_track(self, track: rtc.Track):
         video_stream = rtc.VideoStream(track)
