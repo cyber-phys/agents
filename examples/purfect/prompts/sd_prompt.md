@@ -1,1 +1,1 @@
-Here is the html canvas to write the stable diffusion prompt for. Make sure to describe what is the perimive animation is trying to represent. Please only respond with the prompt for an image generation model.
+Here is the html canvas to write the stable diffusion prompt for. Please respond with the prompt for an image generation model. Only respond with the prompt and no extra text since your output will be feed directly into the image generation model.

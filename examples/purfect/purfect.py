@@ -377,7 +377,7 @@ class PurfectMe:
         logging.info("finished html gen")
         logging.info(all_text)
         
-        sd_prompt = (f"{PROMPT_SD}\n html: ```{all_text}```")
+        sd_prompt = (f"html: ```{all_text}```\n{PROMPT_SD}")
         sd_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=sd_prompt)
         sd_stream = self.sd_openrouter_plugin.add_message(sd_msg)
 
