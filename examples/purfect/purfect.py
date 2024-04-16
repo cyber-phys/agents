@@ -220,6 +220,9 @@ class PurfectMe:
 
         self.last_user_interaction = time.time()
 
+        self.user_talking = False
+        self.user_stopped_talking_time = time.time()
+
 
     async def start(self):
         # if you have to perform teardown cleanup, you can listen to the disconnected event
@@ -335,14 +338,15 @@ class PurfectMe:
             if not self.run:
                 break
 
-    # TODO better handeling of interuption
     def on_active_speakers_changed(self, speakers: list[rtc.Participant]):
         if speakers:
             active_speaker = speakers[0]
             logging.info(f"Active speaker: {active_speaker.identity}")
             self.audio_out_gain = 0.5
+            self.user_talking=True
         else:
-            logging.info("No active speaker")
+            self.user_stopped_talking_time = time.time()
+            self.user_talking=False
 
     # TODO: Clean up create_message_task it is messy
     # TODO this is not working right
@@ -523,8 +527,8 @@ class PurfectMe:
         self.ctx.create_task(self.process_agent_stt_stream(stream))
 
         async for audio_frame_event in audio_stream:
-            # if self._agent_state != AgentState.SPEAKING:
-            #     continue
+            if self._agent_state != AgentState.SPEAKING:
+                continue
             stream.push_frame(audio_frame_event.frame)
         await stream.flush()
     
@@ -535,6 +539,9 @@ class PurfectMe:
         self.ctx.create_task(self.process_user_stt_stream(stream))
 
         async for audio_frame_event in audio_stream:
+            if self.user_talking is False:
+                if time.time() - self.user_stopped_talking_time > 5:
+                    continue
             stream.push_frame(audio_frame_event.frame)
 
         await stream.flush()
