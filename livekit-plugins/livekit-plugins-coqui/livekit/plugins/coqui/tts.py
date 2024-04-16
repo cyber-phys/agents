@@ -8,6 +8,7 @@ from livekit.agents import tts, utils
 import io
 import wave
 import base64
+import contextlib
 
 API_BASE_URL = "http://10.0.0.119:6666"
 DEFAULT_VOICE = "goldvoice"
@@ -124,15 +125,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._event_queue = asyncio.Queue[tts.SynthesisEvent]()
         self._closed = False
         self._main_task = asyncio.create_task(self._run())
-        self._quit = False
 
         def log_exception(task: asyncio.Task) -> None:
             if not task.cancelled() and task.exception():
-                logging.error(f"TTS synthesis task failed: {task.exception()}")
+                logging.error(f"XTTS TTS synthesis task failed: {task.exception()}")
 
         self._main_task.add_done_callback(log_exception)
         self._text = ""
 
+    # TODO make this streaming
     def push_text(self, token: str) -> None:
         if self._closed:
             raise ValueError("cannot push to a closed stream")
@@ -144,42 +145,42 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run(self) -> None:
         try:
-            while True:
-                text = await self._queue.get()
-                self._queue.task_done()
+            text = await self._queue.get()
+            self._queue.task_done()
 
-                async with self._session.get(
-                    f"{self._config.base_url}/api/tts-cloned-stream",
-                    params={
-                        "text": text,
-                        "language": "en",
-                        "style-wav": self._config.voice,
-                    },
-                ) as resp:
-                    self._event_queue.put_nowait(
-                        tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
-                    )
+            async with self._session.get(
+                f"{self._config.base_url}/api/tts-cloned-stream",
+                params={
+                    "text": text,
+                    "language": "en",
+                    "style-wav": self._config.voice,
+                },
+            ) as resp:
+                self._event_queue.put_nowait(
+                    tts.SynthesisEvent(type=tts.SynthesisEventType.STARTED)
+                )
 
-                    async for chunk in resp.content.iter_chunked(4096):
-                        audio_frame = rtc.AudioFrame(
-                            data=chunk,
-                            sample_rate=self._config.sample_rate,
-                            num_channels=1,
-                            samples_per_channel=len(chunk) // 2,  # 16-bit
-                        )
-                        self._event_queue.put_nowait(
-                            tts.SynthesisEvent(
-                                type=tts.SynthesisEventType.AUDIO,
-                                audio=tts.SynthesizedAudio(text=text, data=audio_frame),
-                            )
-                        )
-                    print("putting finished")
-                    self._event_queue.put_nowait(
-                        tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
+                async for chunk in resp.content.iter_chunked(4096):
+                    audio_frame = rtc.AudioFrame(
+                        data=chunk,
+                        sample_rate=self._config.sample_rate,
+                        num_channels=1,
+                        samples_per_channel=len(chunk) // 2,  # 16-bit
                     )
+                    self._event_queue.put_nowait(
+                        tts.SynthesisEvent(
+                            type=tts.SynthesisEventType.AUDIO,
+                            audio=tts.SynthesizedAudio(text=text, data=audio_frame),
+                        )
+                    )
+                print("putting finished")
+                self._event_queue.put_nowait(
+                    tts.SynthesisEvent(type=tts.SynthesisEventType.FINISHED)
+                )
+
         except asyncio.CancelledError:
-        # Handle the cancellation request and exit the loop
-            return
+            raise
+
         finally:
             await self._session.close()
             self._closed = True
@@ -191,12 +192,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def aclose(self) -> None:
         self._main_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            print(e)
+            print("TTS CLOSED")
 
     async def __anext__(self) -> tts.SynthesisEvent:
         if self._closed and self._event_queue.empty():
