@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import asyncio
-from asyncore import loop
 from datetime import datetime
 from enum import Enum
 import json
@@ -57,6 +56,10 @@ VIVI_PROMPT = read_prompt_file("prompts/vivi.md")
 SIP_INTRO = "Hello this is vivi!"
 
 INTRO = "Hey I am vivi your video assistant!"
+
+SYSTEM_PROMPT_SD = read_prompt_file("prompts/sd_system.md")
+
+PROMPT_SD = read_prompt_file("prompts/sd_prompt.md")
 
 # convert intro response to a stream
 async def intro_text_stream(sip: bool):
@@ -129,6 +132,14 @@ class PurfectMe:
         )
 
         self.canvas_openrouter_plugin = ChatGPTPlugin(
+            prompt=SYSTEM_PROMPT_CANVAS,
+            message_capacity=2, 
+            model="anthropic/claude-3-haiku:beta",
+            api_key=os.getenv("OPENROUTER_API_KEY", os.environ["OPENROUTER_API_KEY"]),
+            base_url="https://openrouter.ai/api/v1"
+        )
+
+        self.sd_openrouter_plugin = ChatGPTPlugin(
             prompt=SYSTEM_PROMPT_CANVAS,
             message_capacity=2, 
             model="anthropic/claude-3-haiku:beta",
@@ -359,9 +370,31 @@ class PurfectMe:
         all_text = ""
         async for text in html_stream:
             all_text += text
-        
+
         logging.info("finished html gen")
         logging.info(all_text)
+        
+        sd_prompt = (f"{PROMPT_SD}\n html: ```{all_text}```")
+        sd_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=sd_prompt)
+        sd_stream = self.sd_openrouter_plugin.add_message(sd_msg)
+
+        sd_all_text = ""
+        async for text in sd_stream:
+            sd_all_text += text
+
+        logging.info("finished sd prompt")
+        logging.info(sd_all_text)
+        
+        sd_data = {
+            "prompt": sd_all_text
+        }
+
+        await self.ctx.room.local_participant.publish_data(
+            payload=json.dumps(sd_data),
+            kind=DataPacketKind.KIND_RELIABLE,
+            topic="sdprompt",
+        )
+
         background_data = {
             "html": all_text
         }
@@ -384,7 +417,27 @@ class PurfectMe:
                 async for text in html_stream:
                     all_text += text
 
-                logging.info(all_text)
+                sd_prompt = (f"{PROMPT_SD}\n html: ```{all_text}```")
+                sd_msg = ChatGPTMessage(role=ChatGPTMessageRole.user, content=sd_prompt)
+                sd_stream = self.sd_openrouter_plugin.add_message(sd_msg)
+
+                sd_all_text = ""
+                async for text in sd_stream:
+                    sd_all_text += text
+
+                logging.info("finished sd prompt")
+                logging.info(sd_all_text)
+                
+                sd_data = {
+                    "prompt": sd_all_text
+                }
+
+                await self.ctx.room.local_participant.publish_data(
+                    payload=json.dumps(sd_data),
+                    kind=DataPacketKind.KIND_RELIABLE,
+                    topic="sdprompt",
+                )
+
                 background_data = {
                     "html": all_text
                 }

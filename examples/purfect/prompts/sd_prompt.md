@@ -1,0 +1,1 @@
+Here is the html canvas to write the stable diffusion prompt for. Make sure to describe what is the perimive animation is trying to represent. Please only respond with the prompt for an image generation model.
